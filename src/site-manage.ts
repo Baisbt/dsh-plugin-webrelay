@@ -128,6 +128,48 @@ export function manageSites(body: Record<string, unknown>): { ok: boolean, error
       })
       return { ok: true }
     }
+    case 'bind-browser': {
+      // browser: null 表示回到默认实例；有值必须形如实例 id。
+      const browser = typeof body.browser === 'string' && body.browser.trim().length > 0 ? body.browser.trim() : null
+      if (!id) return { ok: false, error: '缺少站点 id' }
+      withUserSites((sites) => {
+        const entry = { ...asRecord(sites[id]) }
+        if (browser === null) delete entry.browser
+        else entry.browser = browser
+        sites[id] = entry
+      })
+      return { ok: true }
+    }
+    case 'browser-add': {
+      const label = typeof body.label === 'string' ? body.label.trim() : ''
+      const type = body.type === 'edge' ? 'edge' : body.type === 'custom' ? 'custom' : 'chrome'
+      const profile = typeof body.profile === 'string' && body.profile.trim().length > 0 ? body.profile.trim() : 'Default'
+      const port = typeof body.port === 'number' && body.port > 0 && body.port < 65536 ? Math.floor(body.port) : undefined
+      if (label.length === 0) return { ok: false, error: '请填写实例显示名称' }
+      const newId = uniqueId(slugify(label))
+      withUserSites((sites, raw) => {
+        const browsers = asRecord(raw.browsers)
+        browsers[newId] = { label, type, profile, ...(port !== undefined ? { port } : {}) }
+        raw.browsers = browsers
+      })
+      return { ok: true }
+    }
+    case 'browser-remove': {
+      const browserId = typeof body.browser === 'string' ? body.browser.trim() : ''
+      if (browserId.length === 0) return { ok: false, error: '缺少实例 id' }
+      if (browserId === 'default') return { ok: false, error: '默认实例不可删除' }
+      withUserSites((sites, raw) => {
+        const browsers = asRecord(raw.browsers)
+        delete browsers[browserId]
+        raw.browsers = browsers
+        // 解绑引用该实例的站点（回到默认实例）
+        for (const key of Object.keys(sites)) {
+          const entry = asRecord(sites[key])
+          if (entry.browser === browserId) delete entry.browser
+        }
+      })
+      return { ok: true }
+    }
     case 'reset-site': {
       if (!id) return { ok: false, error: '缺少站点 id' }
       withUserSites((sites, raw) => {

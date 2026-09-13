@@ -148,4 +148,12 @@ export const STYLES = `
   align-items: center; justify-content: center; text-align: center;
   background: var(--dsh-bg, #1b1b1f); color: var(--dsh-fg, #e8eaed); padding: 24px;
 }
+
+.dsh-webrelay-select {
+  padding: 3px 6px; font-size: 11px; color: inherit;
+  background: color-mix(in srgb, currentColor 6%, transparent);
+  border: 1px solid color-mix(in srgb, currentColor 14%, transparent); border-radius: 6px;
+}
+.dsh-webrelay-browsers { display: flex; flex-direction: column; gap: 4px; }
+.dsh-webrelay-browsers-head { font-size: 11px; opacity: 0.6; padding: 2px 2px; }
 `

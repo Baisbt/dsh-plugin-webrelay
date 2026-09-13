@@ -8,9 +8,18 @@ DSH Web 双面插件：右侧内置浏览器（relay 反向代理同源嵌入外
 
 ## 当前进度（2026-09-13，版本 0.1.0）
 
-**M0–M4 全部完成（5 次提交）+ 二期"站点管理"已完成 + 二期"CDP 专用联动浏览器"已完成（见下）。**
+**M0–M4 全部完成（5 次提交）+ 二期"站点管理" + 二期"CDP 专用联动浏览器" + 修复轮（见下）。**
 
-### 二期：CDP 专用联动浏览器（本轮新增，注入链路已实测）
+### 修复轮：单击直达 + 多浏览器/多账户（本轮新增，Edge 实例已实测）
+
+- **单击直达修复**：用户反馈首次打开联动浏览器是 about:blank、要点两次。根因：启动固定开 about:blank 初始页 + 页签点击只切视图不action。修复：`openSiteTab` 首次启动直接以站点地址为初始页；已启动时复用遗留空白页导航；`CdpLinkageView` 挂载即自动执行"启动→打开/激活"（`started` ref 防重入）。实测一次 `cdp/open` 后无任何 about:blank 残留。
+- **多浏览器/多账户**：`sites.yml` 新增 `browsers:` 实例表（id → {label, type: chrome|edge|custom, path?, profile, port?}；端口缺省自动分配 9222+），每实例独立配置子目录 `browser-profile/<id>`；同类型浏览器经 `--profile-directory=<profile>` 承载多账户。站点新增 `browser: <实例id>` 绑定（null=默认实例取 cdp 段）。`resolveBrowser`/`launchBrowser`/`findTab`/`openSiteTab` 全部按实例运作。
+- 管理弹窗：新增「联动浏览器实例」区（添加：名称+类型+账户配置目录；删除并自动解绑站点）；联动站点行出现实例绑定下拉。
+- 新 manage 动作：`bind-browser` / `browser-add` / `browser-remove`（删除实例自动解绑）。
+- **实测**：Edge 实例（9223）+ 自测页——单次 open 直达站点页（无 about:blank）、注入往返成功。
+- 教训：测试改 YAML 时对 `cdp:` 段做局部 replace 造出重复键（headless 两次）→ 插件按设计 .bak 回退默认——验证了容错路径。
+
+### 二期：CDP 专用联动浏览器（注入链路已实测）
 
 - 决策（用户确认）：专用实例模式（非附加现有浏览器）+ Chrome 自动探测（找不到时回退 Edge，可 `cdp.browserPath` 手动指定）。
 - `src/cdp.ts`：`/json/list` 发现、`/json/new`（PUT）开标签、`/json/activate` 激活、`Runtime.evaluate`（awaitPromise + returnByValue）注入；`ensureBrowser` 端口探测 + 独立配置目录 `$DSH_HOME/webrelay/browser-profile` 启动（登录态长期保存）。

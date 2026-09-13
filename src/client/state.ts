@@ -11,6 +11,8 @@ export interface SiteInfo {
   match: string[]
   experimental: boolean
   hidden: boolean
+  /** 联动模式绑定的浏览器实例 id（null = 默认实例）。 */
+  browser: string | null
   openIn: 'relay' | 'system' | 'cdp'
   source: 'factory' | 'custom'
   adapter: {
@@ -52,6 +54,8 @@ export interface WebrelayState {
   modal: ModalState | null
   /** 轻量提示（自动消失）。 */
   notice: string | null
+  /** 联动浏览器实例表（含默认实例，来自 /api/sites）。 */
+  browsers: BrowserInfo[]
 }
 
 /** 插入 DSH 输入框的动作句柄（会话槽标准件 inputActions，打开弹窗时捕获）。 */
@@ -82,6 +86,7 @@ let state: WebrelayState = {
   captures: [],
   modal: null,
   notice: null,
+  browsers: [],
 }
 
 const listeners = new Set<() => void>()
@@ -137,13 +142,27 @@ export async function refreshSitesIntoState(): Promise<{ ok: boolean, error?: st
 }
 
 /** CDP 专用联动浏览器 API。 */
+export interface BrowserInfo {
+  id: string
+  label: string
+  type: 'chrome' | 'edge' | 'custom'
+  port: number
+}
+
+export interface CdpInstanceStatus {
+  id: string
+  label: string
+  type: string
+  port: number
+  running: boolean
+  targets: Array<{ id: string, title: string, url: string }>
+}
+
 export interface CdpStatus {
   ok: boolean
-  running: boolean
-  port: number
-  browserPath: string | null
-  profileDir: string
-  targets: Array<{ id: string, title: string, url: string }>
+  profileRoot: string
+  headless: boolean
+  instances: CdpInstanceStatus[]
 }
 
 export async function apiCdpStatus(): Promise<CdpStatus | null> {
@@ -155,9 +174,13 @@ export async function apiCdpStatus(): Promise<CdpStatus | null> {
   }
 }
 
-export async function apiCdpLaunch(): Promise<{ ok: boolean, error?: string }> {
+export async function apiCdpLaunch(siteId: string): Promise<{ ok: boolean, error?: string }> {
   try {
-    const res = await fetch('/dsh-webrelay/api/cdp/launch', { method: 'POST' })
+    const res = await fetch('/dsh-webrelay/api/cdp/launch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ siteId }),
+    })
     return await res.json() as { ok: boolean, error?: string }
   } catch (err) {
     return { ok: false, error: String((err as Error)?.message ?? err) }
@@ -193,8 +216,9 @@ export async function apiCdpRelay(siteId: string, message: string): Promise<{ ok
 
 export async function fetchSites(): Promise<SiteInfo[]> {
   const res = await fetch('/dsh-webrelay/api/sites')
-  const body = await res.json() as { ok: boolean, sites?: SiteInfo[] }
+  const body = await res.json() as { ok: boolean, sites?: SiteInfo[], browsers?: BrowserInfo[] }
   if (!body.ok || !Array.isArray(body.sites)) return []
+  if (Array.isArray(body.browsers)) setState({ browsers: body.browsers })
   return body.sites
 }
 

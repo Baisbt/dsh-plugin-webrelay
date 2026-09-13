@@ -1,24 +1,35 @@
 /**
- * dsh-webrelay —— 专用联动浏览器（CDP）管理。
+ * dsh-webrelay —— 专用联动浏览器（CDP）管理：按"浏览器实例"运作。
  *
- * 一个独立配置目录的 Chromium 实例（默认 Chrome，找不到时回退 Edge），
- * 首次启动后用户在其中登录各站点，登录态长期保存在 $DSH_HOME/webrelay/browser-profile。
- * 插件经 http://127.0.0.1:<port>/json（发现）+ /devtools/page/<id>（WebSocket）操作标签页。
+ * 实例 = 独立进程（独立调试端口 + 独立配置子目录 webrelay/browser-profile/<id>），
+ * 同类型浏览器可经 --profile-directory 承载多个账户配置（用户在联动浏览器里
+ * 通过 Chrome 头像菜单添加人员即可）。
+ * 站点经 sites.<id>.browser 绑定实例；未绑定用默认实例（cdp 段配置）。
  *
- * 安全边界：调试端口仅回环；本模块只对 URL 命中站点 match 白名单的标签页执行注入
- * （白名单校验在调用方 index.ts 的 relay 路由完成，本模块的 findTab 提供 match 匹配）。
+ * 安全边界：调试端口仅回环；只对 URL 命中站点 match 白名单的标签页执行注入。
  */
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
-import { DSH_HOME, matchSite, type CdpConfig, type WebrelayConfig } from './config.js'
+import { DSH_HOME, matchSite, type BrowserInstance, type SiteConfig, type WebrelayConfig } from './config.js'
 
-export const BROWSER_PROFILE_DIR = join(DSH_HOME, 'webrelay', 'browser-profile')
+export const BROWSER_PROFILE_ROOT = join(DSH_HOME, 'webrelay', 'browser-profile')
 
 export interface CdpTarget {
   id: string
   title: string
   url: string
+}
+
+/** 站点解析出的具体联动浏览器（启动参数/端口的最终形态）。 */
+export interface ResolvedBrowser {
+  id: string
+  label: string
+  type: BrowserInstance['type']
+  port: number
+  browserPath: string | null
+  userDataDir: string
+  profile: string
 }
 
 interface CdpResponse {
@@ -27,28 +38,66 @@ interface CdpResponse {
   error?: { message: string }
 }
 
-/** Chrome/Edge 常见安装路径探测（Windows 优先，其次 PATH 常见 Unix 位置）。 */
-export function detectBrowserPath(): string | null {
-  const candidates: string[] = []
+const CHROME_PATHS = (): string[] => {
   if (process.platform === 'win32') {
     const pf = process.env['ProgramFiles'] ?? 'C:\\Program Files'
     const pf86 = process.env['ProgramFiles(x86)'] ?? 'C:\\Program Files (x86)'
     const lap = process.env['LocalAppData'] ?? join(process.env.USERPROFILE ?? 'C:\\Users\\x', 'AppData', 'Local')
-    candidates.push(
+    return [
       join(pf, 'Google\\Chrome\\Application\\chrome.exe'),
       join(pf86, 'Google\\Chrome\\Application\\chrome.exe'),
       join(lap, 'Google\\Chrome\\Application\\chrome.exe'),
+    ]
+  }
+  return ['/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/opt/google/chrome/chrome',
+    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome']
+}
+
+const EDGE_PATHS = (): string[] => {
+  if (process.platform === 'win32') {
+    const pf = process.env['ProgramFiles'] ?? 'C:\\Program Files'
+    const pf86 = process.env['ProgramFiles(x86)'] ?? 'C:\\Program Files (x86)'
+    return [
       join(pf, 'Microsoft\\Edge\\Application\\msedge.exe'),
       join(pf86, 'Microsoft\\Edge\\Application\\msedge.exe'),
-    )
-  } else {
-    candidates.push(
-      '/usr/bin/google-chrome', '/usr/bin/google-chrome-stable',
-      '/opt/google/chrome/chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser',
-      '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-    )
+    ]
   }
+  return ['/usr/bin/microsoft-edge', '/usr/bin/microsoft-edge-stable',
+    '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge']
+}
+
+/** 按类型探测安装路径；custom 类型必须有显式 path。 */
+export function detectBrowserPath(type: BrowserInstance['type'], explicit?: string | null): string | null {
+  if (explicit && explicit.length > 0) return existsSync(explicit) ? explicit : explicit // 显式路径不校验存在性，交给启动报错
+  if (type === 'custom') return null
+  const candidates = type === 'edge' ? [...EDGE_PATHS(), ...CHROME_PATHS()] : [...CHROME_PATHS(), ...EDGE_PATHS()]
   return candidates.find((p) => existsSync(p)) ?? null
+}
+
+/** 把站点解析为其绑定的联动浏览器（未绑定 → 默认实例，取 cdp 段配置）。 */
+export function resolveBrowser(config: WebrelayConfig, site: SiteConfig): ResolvedBrowser {
+  const id = site.browser ?? 'default'
+  const inst = config.browsers.find((b) => b.id === id)
+  if (inst) {
+    return {
+      id: inst.id,
+      label: inst.label,
+      type: inst.type,
+      port: inst.port,
+      browserPath: detectBrowserPath(inst.type, inst.path),
+      userDataDir: join(BROWSER_PROFILE_ROOT, inst.id),
+      profile: inst.profile,
+    }
+  }
+  return {
+    id: 'default',
+    label: '默认联动浏览器',
+    type: 'chrome',
+    port: config.cdp.port,
+    browserPath: detectBrowserPath('chrome', config.cdp.browserPath),
+    userDataDir: join(BROWSER_PROFILE_ROOT, 'default'),
+    profile: 'Default',
+  }
 }
 
 async function fetchJson(url: string, method = 'GET', timeoutMs = 4000): Promise<unknown> {
@@ -81,78 +130,84 @@ export async function listTargets(port: number): Promise<CdpTarget[]> {
     .map((t) => ({ id: t.id as string, title: String(t.title ?? ''), url: String(t.url ?? '') }))
 }
 
-/** 启动专用实例（独立配置目录），并等待调试端口就绪。 */
-export async function launchBrowser(config: CdpConfig): Promise<{ ok: boolean, error?: string, browserPath?: string }> {
-  if (await probePort(config.port)) return { ok: true }
-  const browserPath = config.browserPath ?? detectBrowserPath()
-  if (!browserPath || !existsSync(browserPath)) {
-    return { ok: false, error: '未找到 Chrome/Edge：请在 sites.yml 的 cdp.browserPath 手动指定浏览器路径' }
+/** 启动实例（独立配置目录 + 账户配置），initialUrl 作为初始页（避免遗留 about:blank）。 */
+export async function launchBrowser(browser: ResolvedBrowser, headless: boolean, initialUrl: string | undefined, startupTimeoutMs: number): Promise<{ ok: boolean, error?: string }> {
+  if (await probePort(browser.port)) return { ok: true }
+  const browserPath = browser.browserPath
+  if (!browserPath) {
+    return { ok: false, error: `未找到 ${browser.type === 'edge' ? 'Edge' : 'Chrome'}：请在 sites.yml 中为该实例指定 path` }
   }
   const args = [
-    `--remote-debugging-port=${config.port}`,
-    `--user-data-dir=${BROWSER_PROFILE_DIR}`,
+    `--remote-debugging-port=${browser.port}`,
+    `--user-data-dir=${browser.userDataDir}`,
+    `--profile-directory=${browser.profile}`,
     '--no-first-run',
     '--no-default-browser-check',
-    '--disable-features=DialWifiPhase2Auth',
   ]
-  if (config.headless) args.push('--headless=new')
-  args.push('about:blank')
+  if (headless) args.push('--headless=new')
+  args.push(initialUrl ?? 'about:blank')
   try {
     const child = spawn(browserPath, args, { detached: true, stdio: 'ignore' })
     child.unref()
   } catch (err) {
     return { ok: false, error: `启动浏览器失败：${String((err as Error)?.message ?? err)}` }
   }
-  const deadline = Date.now() + config.startupTimeoutMs
+  const deadline = Date.now() + startupTimeoutMs
   while (Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, 400))
-    if (await probePort(config.port)) return { ok: true, browserPath }
+    if (await probePort(browser.port)) return { ok: true }
   }
-  return { ok: false, error: `浏览器已启动但调试端口 ${config.port} 未就绪（超时 ${config.startupTimeoutMs}ms）` }
+  return { ok: false, error: `浏览器已启动但调试端口 ${browser.port} 未就绪（超时 ${startupTimeoutMs}ms）` }
 }
 
-/** 确保专用实例在跑：已监听则直接用；否则启动。 */
-export async function ensureBrowser(config: CdpConfig): Promise<{ ok: boolean, error?: string }> {
-  if (await probePort(config.port)) return { ok: true }
-  return launchBrowser(config)
-}
-
-/** 按 URL 匹配查找标签页（命中站点 match 白名单）。 */
-export async function findTab(config: WebrelayConfig, siteId: string): Promise<{ target?: CdpTarget, error?: string }> {
-  const site = config.sites.find((s) => s.id === siteId)
-  if (!site) return { error: `未知站点：${siteId}` }
-  const targets = await listTargets(config.cdp.port)
+/** 按站点 match 白名单在实例的标签页中查找。 */
+export async function findTab(browser: ResolvedBrowser, site: SiteConfig): Promise<{ target?: CdpTarget, error?: string }> {
+  const targets = await listTargets(browser.port)
   const hit = targets.find((t) => {
     try {
-      return matchSite(config, new URL(t.url).hostname) !== undefined && site.match.some((m) => {
-        const host = new URL(t.url).hostname.toLowerCase()
-        return host === m || host.endsWith('.' + m)
-      })
+      const host = new URL(t.url).hostname.toLowerCase()
+      return site.match.some((m) => host === m || host.endsWith('.' + m))
     } catch {
       return false
     }
   })
-  if (!hit) return { error: `未找到「${site.name}」的联动标签页：请先在面板中打开该站点` }
+  if (!hit) return { error: `未找到「${site.name}」的联动标签页：请先打开该站点` }
   return { target: hit }
 }
 
-/** 打开（或激活已存在的）站点标签页，返回其 target。 */
-export async function openSiteTab(config: WebrelayConfig, siteId: string): Promise<{ ok: boolean, target?: CdpTarget, error?: string }> {
-  const site = config.sites.find((s) => s.id === siteId)
-  if (!site) return { ok: false, error: `未知站点：${siteId}` }
-  const ensured = await ensureBrowser(config.cdp)
-  if (!ensured.ok) return { ok: false, error: ensured.error }
-  const found = await findTab(config, siteId)
+/**
+ * 打开（或激活已存在的）站点标签页：
+ *  - 已有匹配标签页 → 激活；
+ *  - 首次（实例未启动）→ 以站点地址作为初始页直接启动（不产生 about:blank）；
+ *  - 已启动但无匹配 → 复用遗留空白页导航，否则新开标签页。
+ */
+export async function openSiteTab(config: WebrelayConfig, site: SiteConfig): Promise<{ ok: boolean, target?: CdpTarget, error?: string }> {
+  const browser = resolveBrowser(config, site)
+  const wasRunning = await probePort(browser.port)
+  if (!wasRunning) {
+    const launched = await launchBrowser(browser, config.cdp.headless, site.home, config.cdp.startupTimeoutMs)
+    if (!launched.ok) return { ok: false, error: launched.error }
+    const found = await findTab(browser, site)
+    if (found.target) return { ok: true, target: found.target }
+    return { ok: false, error: found.error }
+  }
+  const found = await findTab(browser, site)
   if (found.target) {
-    // 激活已有标签页并导航到入口地址（若停在其它页则回到 home）。
     try {
-      await fetchJson(`http://127.0.0.1:${config.cdp.port}/json/activate/${found.target.id}`, 'PUT', 3000)
+      await fetchJson(`http://127.0.0.1:${browser.port}/json/activate/${found.target.id}`, 'PUT', 3000)
     } catch { /* 激活失败不阻断 */ }
     return { ok: true, target: found.target }
   }
+  // 复用遗留空白页，避免标签页堆积。
+  const targets = await listTargets(browser.port)
+  const blank = targets.find((t) => t.url === 'about:blank' || t.url === '')
+  if (blank) {
+    await evaluateOnTarget(browser.port, blank.id, `location.href = ${JSON.stringify(site.home)}; true`, 15000)
+    return { ok: true, target: { ...blank, url: site.home } }
+  }
   try {
     const created = await fetchJson(
-      `http://127.0.0.1:${config.cdp.port}/json/new?${encodeURIComponent(site.home)}`,
+      `http://127.0.0.1:${browser.port}/json/new?${encodeURIComponent(site.home)}`,
       'PUT',
       6000,
     ) as Record<string, unknown>

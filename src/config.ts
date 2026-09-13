@@ -39,6 +39,8 @@ export interface SiteConfig {
   hidden: boolean
   /** relay = 内置 iframe；system = 用户当前浏览器新标签页；cdp = 专用联动浏览器（可自动注入/抓取）。 */
   openIn: 'relay' | 'system' | 'cdp'
+  /** 联动模式绑定的浏览器实例 id（browsers 表的键；null = 默认实例）。 */
+  browser: string | null
   adapter: SiteAdapter
 }
 
@@ -62,6 +64,21 @@ export interface CaptureConfig {
   recentLimit: number
 }
 
+/**
+ * 联动浏览器实例：一个独立进程（同类型浏览器可经 --profile-directory 承载多个账户配置）。
+ * 每个实例独立调试端口与配置子目录（webrelay/browser-profile/<id>）。
+ */
+export interface BrowserInstance {
+  id: string
+  label: string
+  type: 'chrome' | 'edge' | 'custom'
+  /** null = 按类型自动探测安装路径。 */
+  path: string | null
+  /** Chrome 账户配置目录名（Default / Profile 1 / …，chrome://version 可查）。 */
+  profile: string
+  port: number
+}
+
 export interface CdpConfig {
   /** 专用联动浏览器的调试端口。 */
   port: number
@@ -81,6 +98,8 @@ export interface WebrelayConfig {
   optimize: OptimizeConfig
   capture: CaptureConfig
   cdp: CdpConfig
+  /** 联动浏览器实例表（空表 = 仅默认实例，取 cdp 段配置）。 */
+  browsers: BrowserInstance[]
 }
 
 const SEND_MODES = new Set(['enter', 'click', 'enter-then-click'])
@@ -118,6 +137,7 @@ function sanitizeSite(id: string, v: unknown): SiteConfig | null {
     match,
     experimental: r.experimental === true,
     hidden: r.hidden === true,
+    browser: typeof r.browser === 'string' && r.browser.length > 0 ? r.browser : null,
     openIn: r.openIn === 'system' ? 'system' : r.openIn === 'cdp' ? 'cdp' : 'relay',
     adapter: sanitizeAdapter(r.adapter),
   }
@@ -148,6 +168,33 @@ function sanitizeOptimize(v: unknown): OptimizeConfig {
     maxTokens: typeof r.maxTokens === 'number' && r.maxTokens > 0 ? Math.floor(r.maxTokens) : 4096,
     reasoningEffort: typeof r.reasoningEffort === 'string' && r.reasoningEffort.length > 0 ? r.reasoningEffort : 'off',
   }
+}
+
+function sanitizeBrowsers(raw: unknown): BrowserInstance[] {
+  const usedPorts = new Set<number>()
+  let autoPort = 9222
+  const nextFree = (): number => {
+    while (usedPorts.has(autoPort)) autoPort++
+    return autoPort++
+  }
+  const out: BrowserInstance[] = []
+  for (const [id, v] of Object.entries(asRecord(raw))) {
+    if (!/^[a-z0-9][a-z0-9_-]{0,31}$/i.test(id)) continue
+    const r = asRecord(v)
+    const type = r.type === 'edge' ? 'edge' : r.type === 'custom' ? 'custom' : 'chrome'
+    let port = typeof r.port === 'number' && r.port > 0 && r.port < 65536 ? Math.floor(r.port) : 0
+    if (port === 0 || usedPorts.has(port)) port = nextFree()
+    usedPorts.add(port)
+    out.push({
+      id,
+      label: typeof r.label === 'string' && r.label.length > 0 ? r.label : id,
+      type,
+      path: typeof r.path === 'string' && r.path.length > 0 ? r.path : null,
+      profile: typeof r.profile === 'string' && r.profile.length > 0 ? r.profile : 'Default',
+      port,
+    })
+  }
+  return out
 }
 
 function sanitizeCdp(v: unknown): CdpConfig {
@@ -182,6 +229,7 @@ function sanitizeConfig(raw: unknown): WebrelayConfig {
     optimize: sanitizeOptimize(r.optimize),
     capture: sanitizeCapture(r.capture),
     cdp: sanitizeCdp(r.cdp),
+    browsers: sanitizeBrowsers(r.browsers),
   }
 }
 
@@ -278,6 +326,7 @@ export function loadConfig(): WebrelayConfig {
       optimize: { ...defaults.optimize, ...asRecord(user.optimize) },
       capture: { ...defaults.capture, ...asRecord(user.capture) },
       cdp: { ...defaults.cdp, ...asRecord(user.cdp) },
+      browsers: asRecord(user.browsers),
     }
     const config = sanitizeConfig(merged)
     config.sites = sites

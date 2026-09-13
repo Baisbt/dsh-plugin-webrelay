@@ -19,7 +19,7 @@ import { loadConfig, type WebrelayConfig } from './config.js'
 import { manageSites } from './site-manage.js'
 import { CookieJar, handleProxy, parseProxyPath } from './relay.js'
 import { buildAdapterExpression, adapterTestPageHtml } from './page-adapter.js'
-import { ensureBrowser, findTab, listTargets, openSiteTab, evaluateOnTarget, detectBrowserPath, BROWSER_PROFILE_DIR } from './cdp.js'
+import { findTab, listTargets, openSiteTab, evaluateOnTarget, detectBrowserPath, resolveBrowser, launchBrowser, probePort, BROWSER_PROFILE_ROOT } from './cdp.js'
 import { optimizePrompt, type LlmLike } from './optimize.js'
 import { listCaptures, readCapture, saveCapture } from './captures.js'
 import { registerCapturesTool } from './tools.js'
@@ -93,9 +93,14 @@ export function apply(ctx: HostContext): void {
           experimental: s.experimental,
           hidden: s.hidden,
           openIn: s.openIn,
+          browser: s.browser,
           source: factoryIds.has(s.id) ? 'factory' : 'custom',
           adapter: s.adapter,
         })),
+        browsers: [
+          { id: 'default', label: '默认联动浏览器', type: 'chrome', port: c.cdp.port },
+          ...c.browsers.map((b) => ({ id: b.id, label: b.label, type: b.type, port: b.port })),
+        ],
         deleted: c.deleted,
       })
     },
@@ -125,25 +130,30 @@ export function apply(ctx: HostContext): void {
       if (!trustedRequest(req)) return rejectUntrusted(res)
       try {
         const cfg = config()
-        const targets = await listTargets(cfg.cdp.port)
+        // 默认实例 + 用户实例表，逐一探测端口并列标签页。
+        const instances: Array<Record<string, unknown>> = []
+        const probe = async (id: string, label: string, type: string, port: number) => {
+          let running = false
+          let targets: Array<{ id: string, title: string, url: string }> = []
+          try {
+            targets = await listTargets(port)
+            running = true
+          } catch { /* 未启动 */ }
+          instances.push({ id, label, type, port, running, targets })
+        }
+        await probe('default', '默认联动浏览器', 'chrome', cfg.cdp.port)
+        for (const b of cfg.browsers) {
+          if (b.id === 'default') continue
+          await probe(b.id, b.label, b.type, b.port)
+        }
         respondJson(res, 200, {
           ok: true,
-          running: true,
-          port: cfg.cdp.port,
-          browserPath: cfg.cdp.browserPath ?? detectBrowserPath(),
-          profileDir: BROWSER_PROFILE_DIR,
-          targets,
+          profileRoot: BROWSER_PROFILE_ROOT,
+          headless: cfg.cdp.headless,
+          instances,
         })
-      } catch {
-        const cfg = config()
-        respondJson(res, 200, {
-          ok: true,
-          running: false,
-          port: cfg.cdp.port,
-          browserPath: cfg.cdp.browserPath ?? detectBrowserPath(),
-          profileDir: BROWSER_PROFILE_DIR,
-          targets: [],
-        })
+      } catch (err) {
+        respondError(res, err)
       }
     },
   }))
@@ -154,8 +164,15 @@ export function apply(ctx: HostContext): void {
     handler: async (req, res) => {
       if (!trustedRequest(req)) return rejectUntrusted(res)
       try {
-        const result = await ensureBrowser(config().cdp)
-        respondJson(res, result.ok ? 200 : 400, result.ok ? { ok: true } : { ok: false, error: result.error })
+        const body = JSON.parse((await readBody(req)) || '{}') as { siteId?: unknown }
+        const siteId = typeof body.siteId === 'string' ? body.siteId : ''
+        const cfg = config()
+        const site = cfg.sites.find((s) => s.id === siteId)
+        const browser = site
+          ? resolveBrowser(cfg, site)
+          : { id: 'default', label: '默认', type: 'chrome' as const, port: cfg.cdp.port, browserPath: detectBrowserPath('chrome', cfg.cdp.browserPath), userDataDir: `${BROWSER_PROFILE_ROOT}\default`, profile: 'Default' }
+        const result = await launchBrowser(browser, cfg.cdp.headless, undefined, cfg.cdp.startupTimeoutMs)
+        respondJson(res, result.ok ? 200 : 400, result.ok ? { ok: true, port: browser.port } : { ok: false, error: result.error })
       } catch (err) {
         respondError(res, err)
       }
@@ -171,7 +188,10 @@ export function apply(ctx: HostContext): void {
         const body = JSON.parse((await readBody(req)) || '{}') as { siteId?: unknown }
         const siteId = typeof body.siteId === 'string' ? body.siteId : ''
         if (siteId.length === 0) throw new Error('siteId is required')
-        const result = await openSiteTab(config(), siteId)
+        const cfg = config()
+        const site = cfg.sites.find((s) => s.id === siteId)
+        if (!site) throw new Error(`未知站点：${siteId}`)
+        const result = await openSiteTab(cfg, site)
         respondJson(res, result.ok ? 200 : 400, result.ok ? { ok: true, target: result.target } : { ok: false, error: result.error })
       } catch (err) {
         respondError(res, err)
@@ -191,14 +211,17 @@ export function apply(ctx: HostContext): void {
         if (siteId.length === 0) throw new Error('siteId is required')
         if (message.trim().length === 0) throw new Error('message is required')
         const cfg = config()
-        const ensured = await ensureBrowser(cfg.cdp)
-        if (!ensured.ok) throw new Error(ensured.error ?? '联动浏览器不可用')
-        const found = await findTab(cfg, siteId)
-        if (!found.target) throw new Error(found.error ?? '未找到联动标签页')
         const site = cfg.sites.find((s) => s.id === siteId)
         if (!site) throw new Error(`未知站点：${siteId}`)
+        const browser = resolveBrowser(cfg, site)
+        if (!await probePort(browser.port)) {
+          const ensured = await openSiteTab(cfg, site)
+          if (!ensured.ok) throw new Error(ensured.error ?? '联动浏览器不可用')
+        }
+        const found = await findTab(browser, site)
+        if (!found.target) throw new Error(found.error ?? '未找到联动标签页')
         const outcome = await evaluateOnTarget(
-          cfg.cdp.port,
+          browser.port,
           found.target.id,
           buildAdapterExpression(site, message),
         ) as { ok: boolean, value?: unknown, error?: string }

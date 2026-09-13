@@ -58,13 +58,11 @@ pnpm typecheck
 
 ### 专用联动浏览器（CDP 模式）
 
-站点打开方式设为「联动」后，插件会管理一个**独立的 Chrome/Edge 实例**（独立配置目录 `$DSH_HOME/webrelay/browser-profile`，不影响你正在使用的浏览器）：
+站点打开方式设为「联动」后，单击该站点页签即直达：插件自动**启动/复用绑定的联动浏览器实例**并以站点地址为初始页打开（不会遗留 about:blank），首次需在该窗口中登录一次，登录态长期保存。
 
-1. 面板中选中联动站点 → 「启动联动浏览器」（Chrome 自动探测安装路径，找不到时在 `cdp.browserPath` 手动指定）；
-2. 「打开站点标签页」在联动实例中打开站点，**首次登录一次，登录态长期保存**；
-3. 之后闪电按钮「整理上下文并发送到浏览器」会把适配器注入到真实标签页（`Runtime.evaluate`）完成 填入→发送→等待→抓取——真实浏览器指纹 + 真实登录态，基本不受嵌入限制与风控影响。
+**多浏览器 / 多账户**：`sites.yml` 的 `browsers:` 段定义联动浏览器实例，每个实例 = 独立进程 + 独立调试端口 + 独立配置子目录（`$DSH_HOME/webrelay/browser-profile/<id>`）；同类型浏览器可经 `profile`（Chrome 账户配置目录名，如 `Default` / `Profile 1`，`chrome://version` 可查）承载多个账户。站点经 `browser: <实例id>` 绑定——例如 DeepSeek 绑 Edge 工作号、ChatGPT 绑 Chrome 主号。管理弹窗提供「＋添加联动浏览器」与每站点的实例绑定下拉。
 
-相关配置（`sites.yml`）：`cdp.port`（默认 9222，仅回环）、`cdp.browserPath`、`cdp.headless`（无窗口模式，自测用）。安全边界：插件只对 URL 命中站点 `match` 白名单的标签页执行注入。
+相关配置（`sites.yml`）：`cdp.port`（默认实例端口 9222，仅回环）、`cdp.browserPath`、`cdp.headless`（无窗口模式，自测用）。安全边界：插件只对 URL 命中站点 `match` 白名单的标签页执行注入。
 
 > 注意：除「恢复全部默认」外，管理操作以结构化方式写回 YAML，文件中的手写注释会被覆盖。
 

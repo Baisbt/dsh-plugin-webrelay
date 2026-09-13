@@ -116,6 +116,14 @@ capture:
 
 # 专用联动浏览器（CDP）设置。openIn: cdp 的站点在该实例中打开（独立配置目录，
 # 首次登录各站点后长期保持登录态，不影响你正在使用的浏览器窗口）。
+# 联动浏览器实例表：每个实例 = 独立进程 + 独立调试端口 + 独立配置子目录；
+# 同类型浏览器可经 profile（Chrome 账户配置目录名，如 Default / Profile 1，chrome://version 可查）
+# 承载多个账户。站点经 sites.<id>.browser: <实例id> 绑定；未绑定的联动站点用默认实例（cdp 段）。
+# 示例：
+# browsers:
+#   chrome-main: { label: Chrome 主号, type: chrome, profile: Default, port: 9222 }
+#   edge-work:   { label: Edge 工作号, type: edge, profile: "Profile 1", port: 9223 }
+browsers: {}
 cdp:
   port: 9222
   # null = 自动探测 Chrome / Edge 安装路径；也可手动指定如 C:/Program Files/Google/Chrome/Application/chrome.exe

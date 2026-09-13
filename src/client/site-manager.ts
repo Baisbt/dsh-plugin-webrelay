@@ -4,7 +4,7 @@
  * 全部操作经 POST /dsh-webrelay/api/sites/manage 写回用户 sites.yml。
  */
 import { createElement as h, useState, type ReactNode } from 'react'
-import { apiManage, getState, notify, refreshSitesIntoState, type SiteInfo } from './state.js'
+import { apiManage, getState, notify, refreshSitesIntoState, type BrowserInfo, type SiteInfo } from './state.js'
 import { withdraw } from './flow.js'
 
 function siteBadges(site: SiteInfo): string[] {
@@ -16,12 +16,37 @@ function siteBadges(site: SiteInfo): string[] {
   return badges
 }
 
+function BrowserSelect({ site, browsers, busy }: { site: SiteInfo, browsers: BrowserInfo[], busy: boolean }): ReactNode {
+  if (site.openIn !== 'cdp') return null
+  return h('select', {
+    className: 'dsh-webrelay-select',
+    title: '该站点联动使用的浏览器实例（实例在下方"联动浏览器"区维护）',
+    disabled: busy,
+    value: site.browser ?? 'default',
+    onChange: (e: React.ChangeEvent<HTMLSelectElement>) => {
+      const browser = e.target.value === 'default' ? null : e.target.value
+      void (async () => {
+        const r = await apiManage('bind-browser', { id: site.id, browser })
+        if (!r.ok) return notify(r.error ?? '绑定失败')
+        await refreshSitesIntoState()
+      })()
+    },
+  },
+    browsers.map((b) => h('option', { key: b.id, value: b.id }, `🧭 ${b.label}`)),
+  )
+}
+
 export function SiteManagerDialog(): ReactNode {
   const sites = getState().sites
+  const browsers = getState().browsers
   const [adding, setAdding] = useState(false)
   const [name, setName] = useState('')
   const [url, setUrl] = useState('')
   const [busy, setBusy] = useState(false)
+  const [browserAdding, setBrowserAdding] = useState(false)
+  const [browserLabel, setBrowserLabel] = useState('')
+  const [browserType, setBrowserType] = useState('chrome')
+  const [browserProfile, setBrowserProfile] = useState('Default')
 
   const run = async (fn: () => Promise<{ ok: boolean, error?: string }>): Promise<void> => {
     setBusy(true)
@@ -85,6 +110,7 @@ export function SiteManagerDialog(): ReactNode {
               void run(() => apiManage('openIn', { id: site.id, openIn: next }))
             },
           }, site.openIn === 'relay' ? '改为联动' : site.openIn === 'cdp' ? '改为浏览器' : '改为内置'),
+          BrowserSelect({ site, browsers, busy }),
           h('button', {
             className: 'dsh-webrelay-mini', title: '恢复出厂适配器与默认设置（自定义站点则整体还原为可出厂合并状态）',
             disabled: busy,
@@ -96,6 +122,60 @@ export function SiteManagerDialog(): ReactNode {
             onClick: () => {
               if (!window.confirm(`删除站点「${site.name}」？${site.source === 'factory' ? '（出厂站点会移入已删除列表，可用"重置"恢复）' : ''}`)) return
               void run(() => apiManage('remove', { id: site.id }))
+            },
+          }, '删除'),
+        ),
+      )),
+    ),
+    browserAdding
+      ? h('div', { className: 'dsh-webrelay-add-form' },
+        h('input', {
+          className: 'dsh-webrelay-input', placeholder: '实例名称（如 Edge 工作号）', value: browserLabel,
+          onChange: (e: React.ChangeEvent<HTMLInputElement>) => setBrowserLabel(e.target.value),
+        }),
+        h('select', {
+          className: 'dsh-webrelay-select', value: browserType,
+          onChange: (e: React.ChangeEvent<HTMLSelectElement>) => setBrowserType(e.target.value),
+        },
+          h('option', { value: 'chrome' }, 'Chrome'),
+          h('option', { value: 'edge' }, 'Edge'),
+        ),
+        h('input', {
+          className: 'dsh-webrelay-input', placeholder: '账户配置目录名（Default / Profile 1…）', value: browserProfile,
+          onChange: (e: React.ChangeEvent<HTMLInputElement>) => setBrowserProfile(e.target.value),
+        }),
+        h('button', {
+          className: 'dsh-webrelay-btn2', 'data-primary': true, disabled: busy,
+          onClick: () => {
+            if (browserLabel.trim().length === 0) return notify('请填写实例名称')
+            setBrowserAdding(false)
+            void run(async () => {
+              const r = await apiManage('browser-add', { label: browserLabel.trim(), type: browserType, profile: browserProfile.trim() || 'Default' })
+              if (r.ok) { setBrowserLabel(''); setBrowserProfile('') }
+              return r
+            })
+          },
+        }, '添加'),
+        h('button', { className: 'dsh-webrelay-btn2', onClick: () => setBrowserAdding(false) }, '取消'),
+      )
+      : null,
+    h('div', { className: 'dsh-webrelay-browsers' },
+      h('div', { className: 'dsh-webrelay-browsers-head' }, '联动浏览器实例（联动站点按此绑定；账户在联动浏览器内用头像菜单添加）'),
+      (browsers.length > 0 ? browsers : [{ id: 'default', label: '默认联动浏览器', type: 'chrome', port: 9222 } as BrowserInfo]).map((b) => h('div', { key: b.id, className: 'dsh-webrelay-site-row' },
+        h('div', { className: 'dsh-webrelay-site-info' },
+          h('div', { className: 'dsh-webrelay-site-line' },
+            h('span', { className: 'dsh-webrelay-site-name' }, b.label),
+            h('span', { className: 'dsh-webrelay-site-badge' }, b.type),
+            h('span', { className: 'dsh-webrelay-site-badge' }, `端口 ${b.port}`),
+          ),
+          h('div', { className: 'dsh-webrelay-site-meta' }, `账户配置：${b.id === 'default' ? 'Default' : '（见实例配置）'}`),
+        ),
+        b.id !== 'default' && h('div', { className: 'dsh-webrelay-site-ops' },
+          h('button', {
+            className: 'dsh-webrelay-mini', 'data-danger': true, disabled: busy,
+            onClick: () => {
+              if (!window.confirm(`删除联动浏览器「${b.label}」？绑定它的站点将回到默认实例。`)) return
+              void run(() => apiManage('browser-remove', { browser: b.id }))
             },
           }, '删除'),
         ),
@@ -116,6 +196,7 @@ export function SiteManagerDialog(): ReactNode {
       )
       : h('div', { className: 'dsh-webrelay-actions', style: { justifyContent: 'flex-start' } },
         h('button', { className: 'dsh-webrelay-btn2', disabled: busy, onClick: () => setAdding(true) }, '＋ 添加站点'),
+        h('button', { className: 'dsh-webrelay-btn2', disabled: busy, onClick: () => setBrowserAdding((v) => !v) }, '＋ 添加联动浏览器'),
         h('button', {
           className: 'dsh-webrelay-btn2', disabled: busy,
           title: '整份配置还原为出厂模板（含注释），自添加站点与排序等改动都会清除',
