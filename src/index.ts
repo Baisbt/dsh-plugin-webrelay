@@ -9,12 +9,14 @@
  * 路由（全部 /dsh-webrelay/ 前缀，信任判据见 http-util.ts）：
  *   ANY  /dsh-webrelay/proxy/<rid>/<target-url>  反向代理（站点白名单）
  *   GET  /dsh-webrelay/api/sites                 站点列表（含 DOM 适配器）
+ *   POST /dsh-webrelay/api/sites/manage          站点管理（添加/删除/隐藏/排序/重置）
  *   POST /dsh-webrelay/api/optimize              提示词优化（text/plain 流式回传）
  *   GET  /dsh-webrelay/api/captures              捕获列表
  *   POST /dsh-webrelay/api/captures              保存捕获
  *   GET  /dsh-webrelay/api/captures/read?file=   读取单条捕获
  */
 import { loadConfig, type WebrelayConfig } from './config.js'
+import { manageSites } from './site-manage.js'
 import { CookieJar, handleProxy, parseProxyPath } from './relay.js'
 import { optimizePrompt, type LlmLike } from './optimize.js'
 import { listCaptures, readCapture, saveCapture } from './captures.js'
@@ -78,6 +80,7 @@ export function apply(ctx: HostContext): void {
     handler: (req, res) => {
       if (!trustedRequest(req)) return rejectUntrusted(res)
       const c = config()
+      const factoryIds = new Set(['deepseek', 'chatgpt', 'doubao', 'qianwen', 'gemini'])
       respondJson(res, 200, {
         ok: true,
         sites: c.sites.map((s) => ({
@@ -86,9 +89,29 @@ export function apply(ctx: HostContext): void {
           home: s.home,
           match: s.match,
           experimental: s.experimental,
+          hidden: s.hidden,
+          openIn: s.openIn,
+          source: factoryIds.has(s.id) ? 'factory' : 'custom',
           adapter: s.adapter,
         })),
+        deleted: c.deleted,
       })
+    },
+  }))
+
+  // ── 站点管理（写回用户 sites.yml；结构化写回会覆盖手写注释） ──
+  disposers.push(ctx.webServer.register({
+    kind: 'exact',
+    path: '/dsh-webrelay/api/sites/manage',
+    handler: async (req, res) => {
+      if (!trustedRequest(req)) return rejectUntrusted(res)
+      try {
+        const body = JSON.parse((await readBody(req)) || '{}') as Record<string, unknown>
+        const result = manageSites(body)
+        respondJson(res, result.ok ? 200 : 400, result)
+      } catch (err) {
+        respondError(res, err)
+      }
     },
   }))
 

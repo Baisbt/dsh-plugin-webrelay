@@ -29,14 +29,16 @@ function BrowserPanel(): ReactElement {
   const frameRef = useRef<HTMLIFrameElement | null>(null)
   const dragState = useRef<{ startX: number, startWidth: number } | null>(null)
 
-  const activeSite = s.sites.find((site) => site.id === s.activeSiteId) ?? s.sites[0] ?? null
+  const visibleSites = s.sites.filter((site) => !site.hidden)
+  const activeSite = visibleSites.find((site) => site.id === s.activeSiteId)
+    ?? (s.sites.find((site) => site.id === s.activeSiteId) ?? null)
 
   useEffect(() => {
     // 面板打开时若尚未加载站点列表，则拉一次。
-    if (s.sites.length === 0) {
+    if (s.sites.length === 0 || visibleSites.length === 0) {
       void refreshSites()
     } else if (s.activeSiteId === null) {
-      setState({ activeSiteId: s.sites[0]?.id ?? null })
+      setState({ activeSiteId: s.sites.find((x) => !x.hidden)?.id ?? null })
     }
     if (s.historyOpen && s.captures.length === 0) void refreshHistory()
   }, [])
@@ -79,7 +81,8 @@ function BrowserPanel(): ReactElement {
         h('span', { className: 'dsh-webrelay-panel-title' }, '内置浏览器'),
         h('button', { className: 'dsh-webrelay-btn', style: { marginLeft: 'auto' }, onClick: close }, '✕'),
       ),
-      h('div', { style: { padding: '16px', fontSize: '13px', opacity: 0.7 } }, '站点配置加载失败或为空：请检查 $DSH_HOME/webrelay/sites.yml'),
+      h('div', { style: { padding: '16px', fontSize: '13px', opacity: 0.7 } },
+  s.sites.length === 0 ? '站点配置加载失败或为空：请检查 $DSH_HOME/webrelay/sites.yml' : '所有站点均已隐藏：在"管理"里恢复显示'),
     )
   }
 
@@ -87,26 +90,46 @@ function BrowserPanel(): ReactElement {
     h('div', { className: 'dsh-webrelay-panel-drag', onMouseDown: onDragStart }),
     h('div', { className: 'dsh-webrelay-panel-head' },
       h('span', { className: 'dsh-webrelay-panel-title' }, '内置浏览器'),
-      s.sites.map((site) => h('button', {
+      visibleSites.map((site) => h('button', {
         key: site.id,
         className: 'dsh-webrelay-site-tab',
         'data-active': site.id === activeSite?.id,
         title: site.home + (site.experimental ? '（实验性适配）' : ''),
-        onClick: () => setState({ activeSiteId: site.id, recognizedSiteId: null }),
+        onClick: () => {
+          if (site.openIn === 'system') {
+            window.open(site.home, '_blank', 'noopener')
+            return
+          }
+          setState({ activeSiteId: site.id, recognizedSiteId: null })
+        },
       }, site.name)),
+      h('button', {
+        className: 'dsh-webrelay-site-tab',
+        title: '站点管理：添加 / 排序 / 隐藏 / 删除 / 恢复默认',
+        onClick: () => setState({ modal: { kind: 'sites' } }),
+      }, '管理'),
       h('span', {
         className: 'dsh-webrelay-badge',
         'data-unknown': s.recognizedSiteId === null,
       }, s.recognizedSiteId !== null ? '已识别' : '未识别'),
     ),
     h('div', { className: 'dsh-webrelay-frame-wrap' },
-      activeSite && h('iframe', {
+      activeSite && activeSite.openIn === 'relay' && h('iframe', {
         key: `${s.rid}:${activeSite.id}`,
         ref: frameRef,
         className: 'dsh-webrelay-frame',
         src: `/dsh-webrelay/proxy/${s.rid}/${activeSite.home}`,
         onLoad: onFrameLoad,
       }),
+      activeSite && activeSite.openIn === 'system' && h('div', { className: 'dsh-webrelay-system-note' },
+        h('div', { style: { fontSize: '13px', lineHeight: 1.7, padding: '0 8px' } },
+          `「${activeSite.name}」已设置为在当前浏览器打开（新标签页，带你的登录态）。`,
+          '该模式下闪电按钮的自动注入/抓取不可用（二期 CDP 联动后开放）。'),
+        h('button', {
+          className: 'dsh-webrelay-btn2', style: { marginTop: '10px' },
+          onClick: () => { window.open(activeSite.home, '_blank', 'noopener') },
+        }, '在当前浏览器打开'),
+      ),
     ),
     s.historyOpen && h('div', { className: 'dsh-webrelay-history' },
       s.captures.length === 0
@@ -156,7 +179,7 @@ async function refreshSites(): Promise<void> {
   try {
     const res = await fetch('/dsh-webrelay/api/sites')
     const body = await res.json() as { ok: boolean, sites?: import('./state.js').SiteInfo[] }
-    if (body.ok && body.sites && body.sites.length > 0) setState({ sites: body.sites, activeSiteId: getState().activeSiteId ?? body.sites[0].id })
+    if (body.ok && body.sites && body.sites.length > 0) setState({ sites: body.sites, activeSiteId: getState().activeSiteId ?? body.sites.find((x) => !x.hidden)?.id ?? null })
   } catch {
     notify('站点配置加载失败')
   }

@@ -10,6 +10,9 @@ export interface SiteInfo {
   home: string
   match: string[]
   experimental: boolean
+  hidden: boolean
+  openIn: 'relay' | 'system'
+  source: 'factory' | 'custom'
   adapter: {
     input: string[]
     inputContentEditable: boolean
@@ -31,6 +34,7 @@ export interface CaptureMeta {
 
 /** 弹窗状态机：优化 → 中继预览 → 中继等待 → 捕获结果。 */
 export type ModalState =
+  | { kind: 'sites' }
   | { kind: 'optimize', phase: 'streaming' | 'ready', text: string, draft: string, gen: number, error?: string }
   | { kind: 'relay-preview', phase: 'streaming' | 'ready', text: string, draft: string, context: string, prefix: string, gen: number, error?: string }
   | { kind: 'relay-wait', status: string }
@@ -106,6 +110,31 @@ export function useStore(): WebrelayState {
 }
 
 // ── 宿主 API 封装（全部同源 /dsh-webrelay/api/*） ──
+
+/** 站点管理操作（写回用户 sites.yml），成功后调用 refreshSitesIntoState 同步。 */
+export async function apiManage(action: string, payload: Record<string, unknown> = {}): Promise<{ ok: boolean, error?: string }> {
+  try {
+    const res = await fetch('/dsh-webrelay/api/sites/manage', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, ...payload }),
+    })
+    return await res.json() as { ok: boolean, error?: string }
+  } catch (err) {
+    return { ok: false, error: String((err as Error)?.message ?? err) }
+  }
+}
+
+/** 重新拉取站点列表并写入 store（管理操作后调用）。 */
+export async function refreshSitesIntoState(): Promise<{ ok: boolean, error?: string }> {
+  try {
+    const sites = await fetchSites()
+    setState({ sites, activeSiteId: getState().activeSiteId ?? sites.find((x) => !x.hidden)?.id ?? null })
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, error: String((err as Error)?.message ?? err) }
+  }
+}
 
 export async function fetchSites(): Promise<SiteInfo[]> {
   const res = await fetch('/dsh-webrelay/api/sites')

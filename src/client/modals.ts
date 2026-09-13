@@ -9,6 +9,7 @@ import { createElement as h, Fragment, useEffect, type ReactElement, type ReactN
 import { createPortal } from 'react-dom'
 import { getState, patchModal, useStore, notify } from './state.js'
 import { cancelWait, confirmSend, insertIntoInput, regenerate, saveCapture, withdraw } from './flow.js'
+import { SiteManagerDialog } from './site-manager.js'
 
 export function ModalRoot(): ReactElement | null {
   const modal = useStore().modal
@@ -18,9 +19,10 @@ export function ModalRoot(): ReactElement | null {
     modal.kind === 'relay-preview' && h(Fragment, { key: 'r' }, RelayPreviewDialog(modal)),
     modal.kind === 'relay-wait' && h(Fragment, { key: 'w' }, RelayWaitDialog(modal)),
     modal.kind === 'capture' && h(Fragment, { key: 'c' }, CaptureDialog(modal)),
+    modal.kind === 'sites' && h(Fragment, { key: 's' }, h(SiteManagerDialog)),
   )
   return createPortal(
-    h('div', { className: 'dsh-webrelay-backdrop', onMouseDown: withdraw }, dialog),
+    h('div', { className: 'dsh-webrelay-backdrop', onMouseDown: modal.kind === 'sites' ? undefined : withdraw }, dialog),
     document.body,
   )
 }

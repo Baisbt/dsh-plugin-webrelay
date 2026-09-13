@@ -115,4 +115,37 @@ export const STYLES = `
 .dsh-webrelay-btn2:hover { background: color-mix(in srgb, currentColor 10%, transparent); }
 .dsh-webrelay-btn2[data-primary="true"] { background: #4c7dff; border-color: #4c7dff; color: #fff; }
 .dsh-webrelay-btn2[data-primary="true"]:hover { background: #3d6bef; }
+
+.dsh-webrelay-site-list { flex: 1; min-height: 120px; overflow: auto; display: flex; flex-direction: column; gap: 4px; }
+.dsh-webrelay-site-row {
+  display: flex; align-items: center; gap: 8px; padding: 7px 10px;
+  border: 1px solid color-mix(in srgb, currentColor 10%, transparent); border-radius: 8px;
+}
+.dsh-webrelay-site-row[data-hidden="true"] { opacity: 0.5; }
+.dsh-webrelay-site-info { min-width: 0; flex: 1; }
+.dsh-webrelay-site-line { display: flex; align-items: center; gap: 6px; }
+.dsh-webrelay-site-name { font-size: 13px; font-weight: 600; }
+.dsh-webrelay-site-badge {
+  font-size: 10px; padding: 1px 6px; border-radius: 999px;
+  background: color-mix(in srgb, currentColor 10%, transparent); opacity: 0.8;
+}
+.dsh-webrelay-site-meta { font-size: 11px; opacity: 0.55; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dsh-webrelay-site-ops { display: flex; gap: 4px; flex: none; }
+.dsh-webrelay-mini {
+  padding: 3px 8px; font-size: 11px; border: 1px solid color-mix(in srgb, currentColor 14%, transparent);
+  border-radius: 6px; background: transparent; color: inherit; cursor: pointer;
+}
+.dsh-webrelay-mini:hover { background: color-mix(in srgb, currentColor 10%, transparent); }
+.dsh-webrelay-mini[data-danger="true"]:hover { background: color-mix(in srgb, #f28b82 25%, transparent); }
+.dsh-webrelay-add-form { display: flex; gap: 6px; flex-wrap: wrap; }
+.dsh-webrelay-input {
+  flex: 1; min-width: 140px; padding: 7px 10px; font-size: 13px; color: inherit;
+  background: color-mix(in srgb, currentColor 6%, transparent);
+  border: 1px solid color-mix(in srgb, currentColor 14%, transparent); border-radius: 8px;
+}
+.dsh-webrelay-system-note {
+  position: absolute; inset: 0; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; text-align: center;
+  background: var(--dsh-bg, #1b1b1f); color: var(--dsh-fg, #e8eaed); padding: 24px;
+}
 `

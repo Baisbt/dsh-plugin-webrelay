@@ -11,7 +11,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync } from '
 import { join, resolve, dirname } from 'node:path'
 import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
-import { parse as parseYaml } from 'yaml'
+import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
 
 export const PACKAGE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const DEFAULT_FILE = join(PACKAGE_ROOT, 'sites.default.yml')
@@ -35,6 +35,10 @@ export interface SiteConfig {
   home: string
   match: string[]
   experimental: boolean
+  /** true = 不在面板页签显示，但识别与代理仍然有效。 */
+  hidden: boolean
+  /** relay = 内置 iframe（闪电按钮选项二可用）；system = 在用户当前浏览器新标签页打开（带登录态）。 */
+  openIn: 'relay' | 'system'
   adapter: SiteAdapter
 }
 
@@ -60,6 +64,8 @@ export interface CaptureConfig {
 
 export interface WebrelayConfig {
   sites: SiteConfig[]
+  /** 用户已"删除"的出厂站点 id（出厂站点无法真删，会被默认模板合并回来）。 */
+  deleted: string[]
   relay: RelayConfig
   optimize: OptimizeConfig
   capture: CaptureConfig
@@ -99,6 +105,8 @@ function sanitizeSite(id: string, v: unknown): SiteConfig | null {
     home: r.home,
     match,
     experimental: r.experimental === true,
+    hidden: r.hidden === true,
+    openIn: r.openIn === 'system' ? 'system' : 'relay',
     adapter: sanitizeAdapter(r.adapter),
   }
 }
@@ -147,6 +155,7 @@ function sanitizeConfig(raw: unknown): WebrelayConfig {
   }
   return {
     sites,
+    deleted: [],
     relay: sanitizeRelay(r.relay),
     optimize: sanitizeOptimize(r.optimize),
     capture: sanitizeCapture(r.capture),
@@ -168,11 +177,30 @@ function loadDefaults(): WebrelayConfig {
   }
 }
 
+/** 读取用户 sites.yml 的原始 YAML 对象（文件缺失/损坏时返回空对象，不抛错）。 */
+export function readUserRaw(): Record<string, unknown> {
+  try {
+    if (!existsSync(USER_FILE)) return {}
+    return asRecord(readYamlFile(USER_FILE))
+  } catch {
+    return {}
+  }
+}
+
+/** 结构化写回用户 sites.yml（会覆盖手写注释；「恢复全部默认」走整文件还原不受影响）。 */
+export function writeUserRaw(raw: Record<string, unknown>): void {
+  mkdirSync(WEBRELAY_DIR, { recursive: true })
+  const header = '# dsh-webrelay 用户配置（可手改，也可在插件"站点管理"界面维护）\n'
+  writeFileSync(USER_FILE, header + stringifyYaml(raw), 'utf8')
+}
+
 let defaults: WebrelayConfig | undefined
 
 /**
  * 生效配置 = 出厂默认 ⊕ 用户配置（浅层按键合并；sites 按站合并）。
  * 用户文件不存在时先复制出厂默认，方便用户直接改。
+ * 站点顺序：用户文件里出现的站点排前（用户显式排序），其余出厂站点按原顺序殿后；
+ * `deleted:` 列表里的出厂站点不参与合并（用户"删除"出厂站点的语义）。
  */
 export function loadConfig(): WebrelayConfig {
   defaults ??= loadDefaults()
@@ -187,20 +215,50 @@ export function loadConfig(): WebrelayConfig {
   if (!existsSync(USER_FILE)) return defaults
   try {
     const user = asRecord(readYamlFile(USER_FILE))
+    const deleted = strArray(user.deleted, [])
+    const userSites = asRecord(user.sites)
+    // 站点合并：出厂为底、用户覆盖；顺序 = 用户文件序 → 出厂序（剔除 deleted）。
+    const factoryRawById = new Map<string, Record<string, unknown>>()
+    const mergedSites: Record<string, unknown> = {}
+    for (const s of defaults.sites) {
+      if (deleted.includes(s.id)) continue
+      const raw = { name: s.name, home: s.home, match: s.match, experimental: s.experimental, hidden: s.hidden, openIn: s.openIn, adapter: s.adapter }
+      factoryRawById.set(s.id, raw)
+      mergedSites[s.id] = raw
+    }
+    for (const [id, v] of Object.entries(userSites)) {
+      // deleted 同时过滤出厂层与用户层条目（初始整份拷贝会带出厂条目，删除语义必须一致）。
+      if (deleted.includes(id)) continue
+      // 用户层条目（如管理界面写的 {hidden:true} stub）合并到出厂定义之上，而不是整体替换。
+      mergedSites[id] = { ...(factoryRawById.get(id) ?? {}), ...asRecord(v) }
+    }
+    const sanitizedById = new Map<string, SiteConfig>()
+    for (const [id, v] of Object.entries(mergedSites)) {
+      const site = sanitizeSite(id, v)
+      if (site) sanitizedById.set(id, site)
+    }
+    const sites: SiteConfig[] = []
+    const seen = new Set<string>()
+    for (const id of Object.keys(userSites)) {
+      const site = sanitizedById.get(id)
+      if (site) { sites.push(site); seen.add(id) }
+    }
+    for (const id of Object.keys(mergedSites)) {
+      if (seen.has(id)) continue
+      const site = sanitizedById.get(id)
+      if (site) sites.push(site)
+    }
     const merged: Record<string, unknown> = {
       ...defaults,
       ...user,
       relay: { ...defaults.relay, ...asRecord(user.relay) },
       optimize: { ...defaults.optimize, ...asRecord(user.optimize) },
       capture: { ...defaults.capture, ...asRecord(user.capture) },
-      sites: {
-        ...Object.fromEntries(defaults.sites.map((s) => [s.id, s])),
-        ...Object.fromEntries(Object.entries(asRecord(user.sites)).map(([id, v]) => [id, { ...asRecord(v) }])),
-      },
     }
-    // 用户删除的站点保持删除：合并后按用户文件里出现的 id 重排（保持用户顺序），
-    // 未在用户文件出现的出厂站点仍保留（避免升级配置丢失站点）。
-    return sanitizeConfig(merged)
+    const config = sanitizeConfig(merged)
+    config.sites = sites
+    config.deleted = deleted
+    return config
   } catch (err) {
     // 损坏的用户配置不静默丢弃：留一份 .bak 再回默认。
     try { renameSync(USER_FILE, USER_FILE + '.bak') } catch { /* ignore */ }
@@ -214,3 +272,6 @@ export function matchSite(config: WebrelayConfig, host: string): SiteConfig | un
   const h = host.toLowerCase()
   return config.sites.find((s) => s.match.some((m) => h === m || h.endsWith('.' + m)))
 }
+
+export const CONFIG_PATHS = { userFile: USER_FILE, defaultFile: DEFAULT_FILE } as const
+
