@@ -1,0 +1,59 @@
+{
+  "name": "@dsh-external/dsh-webrelay",
+  "version": "0.1.0",
+  "description": "DSH Web 中继插件：右侧内置浏览器（relay 反向代理同源嵌入外部 AI 站点）+ 输入框闪电按钮（提示词优化 / 对话流上下文中继发送并抓取回复存档）。",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "webrelay",
+    "browser",
+    "relay",
+    "prompt-optimizer"
+  ],
+  "type": "module",
+  "main": "./lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "sites.default.yml",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE"
+  ],
+  "license": "MIT",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-slots"
+      ],
+      "platform": "web"
+    }
+  },
+  "peerDependencies": {
+    "cordis": "*"
+  },
+  "dependencies": {
+    "yaml": "^2.6.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.3",
+    "@types/react": "~18.3.1",
+    "@types/react-dom": "~18.3.0",
+    "tsdown": "^0.22.14",
+    "typescript": "^5.9.3"
+  },
+  "scripts": {
+    "build": "tsdown",
+    "prepare": "tsdown",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  }
+}

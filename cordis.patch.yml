@@ -1,0 +1,7 @@
+# dsh-webrelay bundle 层：插入引导插件行。
+# 安装：dsh plugin --profile web add link:<本目录>
+# 卸载：dsh plugin --profile web remove @dsh-external/dsh-webrelay
+- insert:
+    - id: dsh-webrelay
+      name: '@dsh-external/dsh-webrelay'
+      config: {}

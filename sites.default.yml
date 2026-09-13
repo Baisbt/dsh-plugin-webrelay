@@ -1,0 +1,115 @@
+# dsh-webrelay 站点配置（默认模板）。
+# 首次运行会复制到 $DSH_HOME/webrelay/sites.yml（Windows 默认 %USERPROFILE%\.dsh\webrelay\sites.yml）。
+# 用户应编辑 $DSH_HOME/webrelay/sites.yml；本文件仅作出厂默认，随插件更新。
+#
+# 字段说明：
+#   name          展示名
+#   home          入口地址（内置浏览器默认打开）
+#   match         站点识别域名列表（也用于限制 relay 代理的目标，防开放代理）
+#   experimental  true = 实验性适配（未端到端实测）
+#   adapter       DOM 适配器：全部为"候选选择器链"，按序取第一个命中的元素
+#     input                 对话输入框（textarea 或 contenteditable）
+#     inputContentEditable  输入框是否 contenteditable（true 时用 textContent + input 事件写入）
+#     send                  发送按钮候选（可空数组 → 用 Enter 键发送）
+#     sendMode              enter | click | enter-then-click
+#     replies               助手回复节点候选（抓取最后一个可见节点文本）
+#     generating            生成中标记候选（出现表示仍在输出；全部消失且回复数稳定 → 视为完成）
+
+sites:
+  deepseek:
+    name: DeepSeek
+    home: https://chat.deepseek.com/
+    match: [chat.deepseek.com]
+    experimental: false
+    adapter:
+      input: ['textarea#chat-input', 'textarea[placeholder]', 'textarea']
+      inputContentEditable: false
+      send: []
+      sendMode: enter
+      replies: ['.ds-markdown', '[class*="message-content"]', '[class*="markdown"]']
+      generating: ['[class*="stop-button"]', '[class*="stop"]', '[class*="generating"]']
+
+  chatgpt:
+    name: ChatGPT
+    home: https://chatgpt.com/
+    match: [chatgpt.com, chat.openai.com]
+    experimental: false
+    adapter:
+      input: ['#prompt-textarea', 'div[contenteditable="true"]', 'textarea[data-id]']
+      inputContentEditable: true
+      send: ['[data-testid="send-button"]', 'button[aria-label*="Send"]', 'button[aria-label*="发送"]']
+      sendMode: enter-then-click
+      replies: ['[data-message-author-role="assistant"]', '.markdown']
+      generating: ['[data-testid="stop-button"]', 'button[aria-label*="Stop"]']
+
+  doubao:
+    name: 豆包
+    home: https://www.doubao.com/chat/
+    match: [doubao.com, www.doubao.com]
+    experimental: true
+    adapter:
+      input: ['[data-testid="chat_input_input"]', 'div[contenteditable="true"]', 'textarea']
+      inputContentEditable: true
+      send: ['[data-testid="chat_input_send_button"]', 'button[aria-label*="发送"]']
+      sendMode: enter-then-click
+      replies: ['[data-testid="receive_message"]', '[class*="message__content"]', '[class*="markdown"]']
+      generating: ['[data-testid="stop_button"]', '[class*="stop"]']
+
+  qianwen:
+    name: 通义千问
+    home: https://www.tongyi.com/
+    match: [tongyi.com, www.tongyi.com, tongyi.aliyun.com]
+    experimental: true
+    adapter:
+      input: ['textarea[placeholder*="千问"]', '#chat-input', 'textarea', 'div[contenteditable="true"]']
+      inputContentEditable: false
+      send: ['[class*="send-button"]', 'button[aria-label*="发送"]']
+      sendMode: enter-then-click
+      replies: ['[class*="answer-item"]', '[class*="tongyi-markdown"]', '[class*="markdown"]']
+      generating: ['[class*="stop"]', '[class*="pause"]']
+
+  gemini:
+    name: Gemini
+    home: https://gemini.google.com/app
+    match: [gemini.google.com]
+    experimental: true
+    adapter:
+      input: ['div.ql-editor[contenteditable="true"]', 'rich-textarea div[contenteditable="true"]', 'div[contenteditable="true"]']
+      inputContentEditable: true
+      send: ['button[aria-label*="Send"]', 'button[aria-label*="发送"]', 'button.send-button']
+      sendMode: click
+      replies: ['model-response', 'message-content', '[class*="markdown"]']
+      generating: ['button[aria-label*="Stop"]', '[class*="loading"]']
+
+# relay 反向代理设置。
+relay:
+  # 从上游响应剥离的响应头（解除 iframe 嵌入与脚本限制）。
+  stripHeaders:
+    - x-frame-options
+    - content-security-policy
+    - content-security-policy-report-only
+    - cross-origin-opener-policy
+    - cross-origin-embedder-policy
+    - cross-origin-resource-policy
+  # 是否注入运行时 shim（改写 fetch/XHR/EventSource/WebSocket 使 SPA 的同源请求继续走代理）。
+  injectShim: true
+  # 单请求上游超时（毫秒）。
+  upstreamTimeoutMs: 60000
+
+# 提示词优化设置。
+optimize:
+  # null = 自动解析（client 传入的当前模型 → 第一个可用 provider/model）。
+  # 也可显式指定：provider: deepseek / model: deepseek-chat。
+  provider: null
+  model: null
+  temperature: 0.4
+  maxTokens: 4096
+  # off = 关闭思考链，避免推理 token 耗尽 maxTokens（deepseek adapter 支持 off/low/high/max）。
+  reasoningEffort: off
+
+# 捕获存档设置。
+capture:
+  # null = $DSH_HOME/webrelay/captures
+  dir: null
+  # 面板历史默认展示条数。
+  recentLimit: 30

@@ -1,0 +1,14 @@
+# 构建产物
+lib/
+*.tsbuildinfo
+
+# 依赖
+node_modules/
+
+# 打包发布
+*.tgz
+
+# 本地运行数据 / 日志
+*.log
+.DS_Store
+.zcode/
