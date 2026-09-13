@@ -19,7 +19,7 @@ import { loadConfig, type WebrelayConfig } from './config.js'
 import { manageSites } from './site-manage.js'
 import { CookieJar, handleProxy, parseProxyPath } from './relay.js'
 import { buildAdapterExpression, adapterTestPageHtml } from './page-adapter.js'
-import { findTab, listTargets, openSiteTab, evaluateOnTarget, detectBrowserPath, resolveBrowser, launchBrowser, probePort, BROWSER_PROFILE_ROOT } from './cdp.js'
+import { findTab, listTargets, openSiteTab, closeTab, evaluateOnTarget, detectBrowserPath, resolveBrowser, launchBrowser, probePort, BROWSER_PROFILE_ROOT } from './cdp.js'
 import { optimizePrompt, type LlmLike } from './optimize.js'
 import { listCaptures, readCapture, saveCapture } from './captures.js'
 import { registerCapturesTool } from './tools.js'
@@ -229,6 +229,26 @@ export function apply(ctx: HostContext): void {
         const value = outcome.value as { ok?: boolean, reply?: string, url?: string, error?: string }
         if (!value?.ok) throw new Error(value?.error ?? '适配器执行失败')
         respondJson(res, 200, { ok: true, reply: value.reply, url: value.url })
+      } catch (err) {
+        respondError(res, err)
+      }
+    },
+  }))
+
+  disposers.push(ctx.webServer.register({
+    kind: 'exact',
+    path: '/dsh-webrelay/api/cdp/close',
+    handler: async (req, res) => {
+      if (!trustedRequest(req)) return rejectUntrusted(res)
+      try {
+        const body = JSON.parse((await readBody(req)) || '{}') as { siteId?: unknown }
+        const siteId = typeof body.siteId === 'string' ? body.siteId : ''
+        if (siteId.length === 0) throw new Error('siteId is required')
+        const cfg = config()
+        const site = cfg.sites.find((s) => s.id === siteId)
+        if (!site) throw new Error(`未知站点：${siteId}`)
+        const result = await closeTab(resolveBrowser(cfg, site), site)
+        respondJson(res, result.ok ? 200 : 400, result)
       } catch (err) {
         respondError(res, err)
       }

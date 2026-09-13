@@ -214,6 +214,20 @@ export async function apiCdpRelay(siteId: string, message: string): Promise<{ ok
   }
 }
 
+/** 关闭站点的联动标签页。 */
+export async function apiCdpClose(siteId: string): Promise<{ ok: boolean, error?: string }> {
+  try {
+    const res = await fetch('/dsh-webrelay/api/cdp/close', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ siteId }),
+    })
+    return await res.json() as { ok: boolean, error?: string }
+  } catch (err) {
+    return { ok: false, error: String((err as Error)?.message ?? err) }
+  }
+}
+
 export async function fetchSites(): Promise<SiteInfo[]> {
   const res = await fetch('/dsh-webrelay/api/sites')
   const body = await res.json() as { ok: boolean, sites?: SiteInfo[], browsers?: BrowserInfo[] }

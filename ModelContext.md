@@ -8,9 +8,18 @@ DSH Web 双面插件：右侧内置浏览器（relay 反向代理同源嵌入外
 
 ## 当前进度（2026-09-13，版本 0.1.0）
 
-**M0–M4 全部完成（5 次提交）+ 二期"站点管理" + 二期"CDP 专用联动浏览器" + 修复轮（见下）。**
+**M0–M4 + 站点管理 + CDP 联动 + 修复轮（单击直达/多实例/崩溃修复）全部完成。**
 
-### 修复轮：单击直达 + 多浏览器/多账户（本轮新增，Edge 实例已实测）
+### 修复轮 2：浮层崩溃根因修复 + 四项用户新需求（本轮）
+
+- **浮层"关闭且无法再打开"根因确认**：React #300（hook 数量跨渲染变化）——`useEscape` 只在 optimize/relay-preview 弹窗里调用（作为 ModalRoot 内联函数的 hook），弹窗切换到 relay-wait/capture 时 hook 数变少 → 弹窗子树崩溃 → 旧版无边界时整个浮层（含面板）被 React 卸载。修复：`useEscape` 提升到 ModalRoot 顶层无条件调用（sites 弹窗禁用 Esc）；**OverlayBoundary 错误边界**分域包裹 modal/panel 子树（崩溃降级为可"恢复"的错误卡片）；用户场景吻合：DeepSeek 设为联动 → 选项二发送 → 弹窗切到等待态即崩，后台 CDP 抓取完成但捕获弹窗永远出不来（= 用户第 4 条需求的由来）。
+- **取消语义重做**：confirmSend 保存预览快照（lastPreview）+ 完成守卫（stillWaiting：用户取消后迟到的结果不覆盖界面）；「取消并撤回」立即恢复预览（编辑内容不丢）。CDP 分支的在途请求由守卫兜底。
+- **需求1 编辑实例**：manage 动作 `browser-edit` + 管理弹窗实例行「编辑」表单（名称/类型/账户配置目录）。
+- **需求2 关闭标签页**：`POST /api/cdp/close`（cdp.ts `closeTab`，/json/close）+ 联动视图「关闭标签页」按钮（只关匹配站点 match 的标签页）。
+- **需求4 联动视图捕获列表**：CdpLinkageView 按站点过滤展示捕获历史，点击打开捕获详情弹窗。
+- 全部实测：无边界错误、面板全程存活、取消后编辑保留、实例添加→编辑→改名生效、关闭标签页精确生效、捕获列表/详情正常。
+
+### 修复轮：单击直达 + 多浏览器/多账户（已实测）
 
 - **单击直达修复**：用户反馈首次打开联动浏览器是 about:blank、要点两次。根因：启动固定开 about:blank 初始页 + 页签点击只切视图不action。修复：`openSiteTab` 首次启动直接以站点地址为初始页；已启动时复用遗留空白页导航；`CdpLinkageView` 挂载即自动执行"启动→打开/激活"（`started` ref 防重入）。实测一次 `cdp/open` 后无任何 about:blank 残留。
 - **多浏览器/多账户**：`sites.yml` 新增 `browsers:` 实例表（id → {label, type: chrome|edge|custom, path?, profile, port?}；端口缺省自动分配 9222+），每实例独立配置子目录 `browser-profile/<id>`；同类型浏览器经 `--profile-directory=<profile>` 承载多账户。站点新增 `browser: <实例id>` 绑定（null=默认实例取 cdp 段）。`resolveBrowser`/`launchBrowser`/`findTab`/`openSiteTab` 全部按实例运作。

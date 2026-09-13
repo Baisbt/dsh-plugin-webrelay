@@ -13,6 +13,9 @@ import { SiteManagerDialog } from './site-manager.js'
 
 export function ModalRoot(): ReactElement | null {
   const modal = useStore().modal
+  // hook 必须无条件调用：此前 useEscape 只在部分弹窗里调用，弹窗切换时 hook 数量
+// 变化触发 React #300，整个浮层子树被卸载（面板"关闭且无法再打开"的根源）。
+  useEscape(modal?.kind !== 'sites')
   if (!modal) return null
   const dialog = h('div', { className: 'dsh-webrelay-dialog', onMouseDown: stopPropagation },
     modal.kind === 'optimize' && h(Fragment, { key: 'o' }, OptimizeDialog(modal)),
@@ -31,16 +34,16 @@ function stopPropagation(e: React.MouseEvent): void {
   e.stopPropagation()
 }
 
-function useEscape(): void {
+function useEscape(enabled: boolean): void {
   useEffect(() => {
+    if (!enabled) return
     const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') withdraw() }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [])
+  }, [enabled])
 }
 
 function OptimizeDialog(modal: Extract<import('./state.js').ModalState, { kind: 'optimize' }>): ReactNode {
-  useEscape()
   const streaming = modal.phase === 'streaming'
   return [
     h('div', { className: 'dsh-webrelay-dialog-head' },
@@ -70,7 +73,6 @@ function OptimizeDialog(modal: Extract<import('./state.js').ModalState, { kind: 
 }
 
 function RelayPreviewDialog(modal: Extract<import('./state.js').ModalState, { kind: 'relay-preview' }>): ReactNode {
-  useEscape()
   const streaming = modal.phase === 'streaming'
   const site = getState().sites.find((s) => s.id === getState().recognizedSiteId)
   return [
@@ -112,7 +114,7 @@ function RelayWaitDialog(modal: Extract<import('./state.js').ModalState, { kind:
       h('span', null, modal.status),
     ),
     h('div', { className: 'dsh-webrelay-actions' },
-      h('button', { className: 'dsh-webrelay-btn2', onClick: cancelWait }, '取消'),
+      h('button', { className: 'dsh-webrelay-btn2', onClick: cancelWait }, '取消并撤回'),
     ),
   ]
 }

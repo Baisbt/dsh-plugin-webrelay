@@ -47,6 +47,7 @@ export function SiteManagerDialog(): ReactNode {
   const [browserLabel, setBrowserLabel] = useState('')
   const [browserType, setBrowserType] = useState('chrome')
   const [browserProfile, setBrowserProfile] = useState('Default')
+  const [editingBrowser, setEditingBrowser] = useState<string | null>(null)
 
   const run = async (fn: () => Promise<{ ok: boolean, error?: string }>): Promise<void> => {
     setBusy(true)
@@ -163,14 +164,55 @@ export function SiteManagerDialog(): ReactNode {
       h('div', { className: 'dsh-webrelay-browsers-head' }, '联动浏览器实例（联动站点按此绑定；账户在联动浏览器内用头像菜单添加）'),
       (browsers.length > 0 ? browsers : [{ id: 'default', label: '默认联动浏览器', type: 'chrome', port: 9222 } as BrowserInfo]).map((b) => h('div', { key: b.id, className: 'dsh-webrelay-site-row' },
         h('div', { className: 'dsh-webrelay-site-info' },
-          h('div', { className: 'dsh-webrelay-site-line' },
-            h('span', { className: 'dsh-webrelay-site-name' }, b.label),
-            h('span', { className: 'dsh-webrelay-site-badge' }, b.type),
-            h('span', { className: 'dsh-webrelay-site-badge' }, `端口 ${b.port}`),
-          ),
-          h('div', { className: 'dsh-webrelay-site-meta' }, `账户配置：${b.id === 'default' ? 'Default' : '（见实例配置）'}`),
+          editingBrowser === b.id
+            ? h('div', { className: 'dsh-webrelay-add-form' },
+              h('input', {
+                className: 'dsh-webrelay-input', value: browserLabel, placeholder: '实例名称',
+                onChange: (e: React.ChangeEvent<HTMLInputElement>) => setBrowserLabel(e.target.value),
+              }),
+              h('select', {
+                className: 'dsh-webrelay-select', value: browserType,
+                onChange: (e: React.ChangeEvent<HTMLSelectElement>) => setBrowserType(e.target.value),
+              },
+                h('option', { value: 'chrome' }, 'Chrome'),
+                h('option', { value: 'edge' }, 'Edge'),
+              ),
+              h('input', {
+                className: 'dsh-webrelay-input', value: browserProfile, placeholder: '账户配置目录名',
+                onChange: (e: React.ChangeEvent<HTMLInputElement>) => setBrowserProfile(e.target.value),
+              }),
+              h('button', {
+                className: 'dsh-webrelay-btn2', 'data-primary': true, disabled: busy,
+                onClick: () => {
+                  setEditingBrowser(null)
+                  void run(async () => {
+                    const r = await apiManage('browser-edit', { browser: b.id, label: browserLabel.trim(), type: browserType, profile: browserProfile.trim() || 'Default' })
+                    if (r.ok) setBrowserLabel('')
+                    return r
+                  })
+                },
+              }, '保存'),
+              h('button', { className: 'dsh-webrelay-btn2', onClick: () => setEditingBrowser(null) }, '取消'),
+            )
+            : h('div', null,
+              h('div', { className: 'dsh-webrelay-site-line' },
+                h('span', { className: 'dsh-webrelay-site-name' }, b.label),
+                h('span', { className: 'dsh-webrelay-site-badge' }, b.type),
+                h('span', { className: 'dsh-webrelay-site-badge' }, `端口 ${b.port}`),
+              ),
+              h('div', { className: 'dsh-webrelay-site-meta' }, `账户配置：${b.id === 'default' ? 'Default（默认实例）' : '见编辑表单'}`),
+            ),
         ),
-        b.id !== 'default' && h('div', { className: 'dsh-webrelay-site-ops' },
+        b.id !== 'default' && editingBrowser !== b.id && h('div', { className: 'dsh-webrelay-site-ops' },
+          h('button', {
+            className: 'dsh-webrelay-mini', title: '修改实例名称 / 浏览器类型 / 账户配置', disabled: busy,
+            onClick: () => {
+              setBrowserLabel(b.label)
+              setBrowserType(b.type)
+              setBrowserProfile(b.id === 'default' ? 'Default' : 'Default')
+              setEditingBrowser(b.id)
+            },
+          }, '编辑'),
           h('button', {
             className: 'dsh-webrelay-mini', 'data-danger': true, disabled: busy,
             onClick: () => {

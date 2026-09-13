@@ -218,6 +218,18 @@ export async function openSiteTab(config: WebrelayConfig, site: SiteConfig): Pro
   }
 }
 
+/** 关闭站点的联动标签页。 */
+export async function closeTab(browser: ResolvedBrowser, site: SiteConfig): Promise<{ ok: boolean, error?: string }> {
+  const found = await findTab(browser, site)
+  if (!found.target) return { ok: false, error: found.error ?? '未找到联动标签页' }
+  try {
+    await fetch(`http://127.0.0.1:${browser.port}/json/close/${found.target.id}`, { method: 'PUT' })
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, error: `关闭标签页失败：${String((err as Error)?.message ?? err)}` }
+  }
+}
+
 /**
  * 在目标标签页执行一段 async 表达式并取回返回值。
  * 表达式须返回 Promise；awaitPromise + returnByValue。

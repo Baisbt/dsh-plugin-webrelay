@@ -154,6 +154,28 @@ export function manageSites(body: Record<string, unknown>): { ok: boolean, error
       })
       return { ok: true }
     }
+    case 'browser-edit': {
+      // 编辑既有实例：未提供的字段回退到该实例当前值。
+      const browserId = typeof body.browser === 'string' ? body.browser.trim() : ''
+      if (browserId.length === 0 || browserId === 'default') return { ok: false, error: '实例 id 无效' }
+      withUserSites((sites, raw) => {
+        const browsers = asRecord(raw.browsers)
+        const prev = asRecord(browsers[browserId])
+        const label = typeof body.label === 'string' && body.label.trim().length > 0
+          ? body.label.trim()
+          : (typeof prev.label === 'string' ? prev.label : browserId)
+        const type = body.type === 'edge' ? 'edge' : body.type === 'custom' ? 'custom' : 'chrome'
+        const profile = typeof body.profile === 'string' && body.profile.trim().length > 0
+          ? body.profile.trim()
+          : (typeof prev.profile === 'string' ? prev.profile : 'Default')
+        const port = typeof body.port === 'number' && body.port > 0 && body.port < 65536
+          ? Math.floor(body.port)
+          : (typeof prev.port === 'number' ? prev.port : undefined)
+        browsers[browserId] = { label, type, profile, ...(port !== undefined ? { port } : {}) }
+        raw.browsers = browsers
+      })
+      return { ok: true }
+    }
     case 'browser-remove': {
       const browserId = typeof body.browser === 'string' ? body.browser.trim() : ''
       if (browserId.length === 0) return { ok: false, error: '缺少实例 id' }

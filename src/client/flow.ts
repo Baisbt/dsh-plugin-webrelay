@@ -7,6 +7,7 @@
  */
 import {
   apiContext, apiCdpRelay, apiListCaptures, apiOptimize, apiSaveCapture, getState, notify, patchModal, setState, getSetDraft,
+  type ModalState,
   type SiteInfo,
 } from './state.js'
 import { recognizeSite, relaySend } from './relay-run.js'
@@ -90,6 +91,9 @@ export function withdraw(): void {
   setState({ modal: null })
 }
 
+/** 发送前的预览快照：取消时据此恢复（用户在等待阶段的编辑不丢失）。 */
+let lastPreview: Extract<ModalState, { kind: 'relay-preview' }> | null = null
+
 /** 选项二第二步：确认后写入浏览器并等待抓取。 */
 export async function confirmSend(): Promise<void> {
   const modal = getState().modal
@@ -104,9 +108,13 @@ export async function confirmSend(): Promise<void> {
     patchModal({ error: '发送内容为空' })
     return
   }
+  lastPreview = modal
   relayAborted = false
   setState({ modal: { kind: 'relay-wait', status: '准备发送…' } })
+  // 完成守卫：用户已取消/撤回（弹窗不再处于等待态）时丢弃迟到的结果，不覆盖用户界面。
+  const stillWaiting = (): boolean => getState().modal?.kind === 'relay-wait'
   const finish = (reply: string, url: string) => {
+    if (!stillWaiting()) return
     setState({
       modal: {
         kind: 'capture',
@@ -120,6 +128,7 @@ export async function confirmSend(): Promise<void> {
     void refreshHistory()
   }
   const fail = (err: unknown) => {
+    if (!stillWaiting()) return
     setState({
       modal: {
         kind: 'relay-preview', phase: 'ready', text: message, draft: modal.draft,
@@ -150,6 +159,14 @@ export async function confirmSend(): Promise<void> {
 
 export function cancelWait(): void {
   relayAborted = true
+  if (getState().modal?.kind !== 'relay-wait') return
+  // 立即恢复发送前的预览（编辑内容不丢）；仍在途的请求结果由 confirmSend 的完成守卫丢弃。
+  const preview = lastPreview
+  if (preview !== null) {
+    setState({ modal: { ...preview, error: '已取消：可修改后重新发送，或撤回' } })
+    return
+  }
+  withdraw()
 }
 
 /** 捕获弹窗：保存到磁盘（保留弹窗以便继续编辑/复制）。 */

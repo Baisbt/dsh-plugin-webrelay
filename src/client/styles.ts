@@ -156,4 +156,6 @@ export const STYLES = `
 }
 .dsh-webrelay-browsers { display: flex; flex-direction: column; gap: 4px; }
 .dsh-webrelay-browsers-head { font-size: 11px; opacity: 0.6; padding: 2px 2px; }
+
+.dsh-webrelay-capture-list { width: 100%; max-height: 32%; overflow: auto; margin-top: 10px; }
 `

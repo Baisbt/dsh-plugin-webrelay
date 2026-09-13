@@ -2,26 +2,56 @@
  * dsh-webrelay —— shell.overlay 槽的 Overlay 根：浏览器面板 + 弹窗 + 轻提示。
  * shell.overlay 是 additive list 层，本插件只渲染自绘的停靠面板，不触碰其他插件。
  */
-import { createElement as h, Fragment, useCallback, useEffect, useRef, type ReactElement } from 'react'
+import { createElement as h, Component, Fragment, useCallback, useEffect, useRef, type ReactElement, type ReactNode } from 'react'
 import { apiListCaptures, apiReadCapture, getState, notify, setState, useStore, type CaptureMeta } from './state.js'
 import { registerFrame, currentTarget } from './relay-run.js'
 import { ModalRoot } from './modals.js'
 import { CdpLinkageView } from './cdp-view.js'
 
+/** 渲染错误边界：任何子树崩溃都降级为可恢复的错误卡片，而不是拖死整个浮层（面板"再也打不开"的根源）。 */
+class OverlayBoundary extends Component<{ children?: ReactNode }, { error: Error | null }> {
+  state = { error: null as Error | null }
+  static getDerivedStateFromError(error: Error): { error: Error } {
+    return { error }
+  }
+  render() {
+    if (this.state.error !== null) {
+      return h('div', {
+        className: 'dsh-webrelay-toast',
+        style: {
+          position: 'fixed', top: '16px', left: '50%', transform: 'translateX(-50%)',
+          zIndex: 10030, padding: '10px 14px', borderRadius: '8px', fontSize: '12px',
+          background: 'var(--dsh-bg-elevated, #2a2a2e)', color: '#f28b82',
+          boxShadow: '0 8px 24px rgb(0 0 0 / 35%)', pointerEvents: 'auto', maxWidth: '70vw',
+        },
+      },
+        `webrelay 浮层渲染出错：${this.state.error.message}`,
+        h('button', {
+          className: 'dsh-webrelay-btn2', style: { marginLeft: '8px' },
+          onClick: () => { this.setState({ error: null }) },
+        }, '恢复'),
+      )
+    }
+    return this.props.children
+  }
+}
+
 export function OverlayRoot(): ReactElement {
   const s = useStore()
-  return h(Fragment, null,
-    s.notice !== null && h('div', {
-      className: 'dsh-webrelay-toast',
-      style: {
-        position: 'fixed', top: '16px', left: '50%', transform: 'translateX(-50%)',
-        zIndex: 10030, padding: '8px 14px', borderRadius: '8px', fontSize: '13px',
-        background: 'var(--dsh-bg-elevated, #2a2a2e)', color: 'var(--dsh-fg, #e8eaed)',
-        boxShadow: '0 8px 24px rgb(0 0 0 / 35%)', pointerEvents: 'auto',
-      },
-    }, s.notice),
-    s.modal !== null && h(ModalRoot),
-    s.open && h(BrowserPanel),
+  return h(OverlayBoundary, null,
+    h(Fragment, null,
+      s.notice !== null && h('div', {
+        className: 'dsh-webrelay-toast',
+        style: {
+          position: 'fixed', top: '16px', left: '50%', transform: 'translateX(-50%)',
+          zIndex: 10030, padding: '8px 14px', borderRadius: '8px', fontSize: '13px',
+          background: 'var(--dsh-bg-elevated, #2a2a2e)', color: 'var(--dsh-fg, #e8eaed)',
+          boxShadow: '0 8px 24px rgb(0 0 0 / 35%)', pointerEvents: 'auto',
+        },
+      }, s.notice),
+      s.modal !== null && h(OverlayBoundary, { key: 'modal' }, h(ModalRoot)),
+      s.open && h(OverlayBoundary, { key: 'panel' }, h(BrowserPanel)),
+    ),
   )
 }
 

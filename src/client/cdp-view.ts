@@ -1,11 +1,14 @@
 /**
  * dsh-webrelay —— CDP 联动视图（openIn: 'cdp' 的站点在面板中的呈现）。
  *
- * 单击站点页签即直达：视图挂载时自动完成「启动联动浏览器 → 打开/激活站点标签页」，
- * 不再需要用户二次点击。显示所绑定实例的连接状态与目标标签页。
+ * 单击站点页签即直达：视图挂载时自动完成「启动联动浏览器 → 打开/激活站点标签页」。
+ * 提供关闭标签页、刷新状态，并展示该站点的捕获历史（点击查看详情）。
  */
 import { createElement as h, useEffect, useRef, useState, type ReactElement } from 'react'
-import { apiCdpLaunch, apiCdpOpen, apiCdpStatus, notify, type CdpStatus, type SiteInfo } from './state.js'
+import {
+  apiCdpClose, apiCdpLaunch, apiCdpOpen, apiCdpStatus, apiListCaptures, apiReadCapture,
+  getState, notify, setState, type CaptureMeta, type CdpStatus, type SiteInfo,
+} from './state.js'
 
 type Phase = 'idle' | 'launching' | 'opening' | 'ready'
 
@@ -13,7 +16,13 @@ export function CdpLinkageView({ site }: { site: SiteInfo }): ReactElement {
   const [status, setStatus] = useState<CdpStatus | null>(null)
   const [phase, setPhase] = useState<Phase>('idle')
   const [error, setError] = useState<string | null>(null)
+  const [captures, setCaptures] = useState<CaptureMeta[]>([])
   const started = useRef(false)
+
+  const refresh = async (): Promise<void> => {
+    setStatus(await apiCdpStatus())
+    setCaptures((await apiListCaptures()).filter((c) => c.site === site.id))
+  }
 
   const ensureOpen = async (): Promise<void> => {
     if (started.current) return
@@ -31,11 +40,7 @@ export function CdpLinkageView({ site }: { site: SiteInfo }): ReactElement {
       setPhase('idle')
       setError(String((err as Error)?.message ?? err))
     }
-    setStatus(await apiCdpStatus())
-  }
-
-  const refresh = async (): Promise<void> => {
-    setStatus(await apiCdpStatus())
+    await refresh()
   }
 
   useEffect(() => { void ensureOpen() }, [])
@@ -57,8 +62,19 @@ export function CdpLinkageView({ site }: { site: SiteInfo }): ReactElement {
       ? '正在打开站点标签页…'
       : null
 
+  const openCapture = async (file: string): Promise<void> => {
+    const entry = await apiReadCapture(file)
+    if (!entry) return notify('读取捕获失败')
+    setState({
+      modal: {
+        kind: 'capture', reply: entry.reply, url: entry.url,
+        site: entry.site, siteName: entry.siteName, prompt: entry.prompt, savedFile: entry.file,
+      },
+    })
+  }
+
   return h('div', { className: 'dsh-webrelay-system-note' },
-    h('div', { style: { fontSize: '13px', lineHeight: 1.8, padding: '0 8px', maxWidth: '480px' } },
+    h('div', { style: { fontSize: '13px', lineHeight: 1.8, padding: '0 8px', maxWidth: '500px' } },
       h('div', null,
         `联动浏览器「${instance?.label ?? instanceId}」：`,
         h('b', null, phaseText ?? (instance?.running ? `已连接（端口 ${instance.port}）` : '未启动')),
@@ -73,7 +89,7 @@ export function CdpLinkageView({ site }: { site: SiteInfo }): ReactElement {
         '在联动模式下，闪电按钮「整理上下文并发送到浏览器」会注入到真实标签页并抓取回复。'),
       error !== null && h('div', { className: 'dsh-webrelay-error', style: { marginTop: '6px' } }, error),
     ),
-    h('div', { style: { display: 'flex', gap: '8px', marginTop: '12px' } },
+    h('div', { style: { display: 'flex', gap: '8px', marginTop: '12px', flexWrap: 'wrap' } },
       h('button', {
         className: 'dsh-webrelay-btn2', 'data-primary': true,
         disabled: phase === 'launching' || phase === 'opening',
@@ -81,8 +97,38 @@ export function CdpLinkageView({ site }: { site: SiteInfo }): ReactElement {
           started.current = false
           void ensureOpen()
         },
-      }, '重新打开站点'),
-      h('button', { className: 'dsh-webrelay-btn2', disabled: phase === 'launching' || phase === 'opening', onClick: () => void refresh() }, '刷新状态'),
+      }, '打开 / 激活站点标签页'),
+      h('button', {
+        className: 'dsh-webrelay-btn2',
+        disabled: busyOr(phase, !siteTab),
+        title: '关闭联动浏览器中该站点的标签页（联动浏览器窗口保留）',
+        onClick: () => {
+          void (async () => {
+            const r = await apiCdpClose(site.id)
+            if (!r.ok) return notify(r.error ?? '关闭失败')
+            notify('联动标签页已关闭')
+            await refresh()
+          })()
+        },
+      }, '关闭标签页'),
+      h('button', { className: 'dsh-webrelay-btn2', onClick: () => void refresh() }, '刷新状态'),
+    ),
+    h('div', { className: 'dsh-webrelay-capture-list' },
+      h('div', { className: 'dsh-webrelay-browsers-head' }, `捕获记录（${site.name}）`),
+      captures.length === 0
+        ? h('div', { style: { fontSize: '12px', opacity: 0.55, padding: '2px 0' } }, '暂无捕获：用闪电按钮发送后，回复会存档在这里')
+        : captures.map((c) => h('button', {
+          key: c.file,
+          className: 'dsh-webrelay-history-item',
+          onClick: () => void openCapture(c.file),
+        },
+          h('div', null, c.prompt.replace(/\s+/g, ' ').slice(0, 70) || '（无提示词）'),
+          h('div', { className: 'dsh-webrelay-history-meta' }, `${new Date(c.createdAt).toLocaleString()} · 点击查看全文`),
+        )),
     ),
   )
+}
+
+function busyOr(phase: Phase, tabMissing: boolean): boolean {
+  return phase === 'launching' || phase === 'opening' || tabMissing
 }
