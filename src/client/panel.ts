@@ -6,6 +6,7 @@ import { createElement as h, Fragment, useCallback, useEffect, useRef, type Reac
 import { apiListCaptures, apiReadCapture, getState, notify, setState, useStore, type CaptureMeta } from './state.js'
 import { registerFrame, currentTarget } from './relay-run.js'
 import { ModalRoot } from './modals.js'
+import { CdpLinkageView } from './cdp-view.js'
 
 export function OverlayRoot(): ReactElement {
   const s = useStore()
@@ -100,7 +101,7 @@ function BrowserPanel(): ReactElement {
             window.open(site.home, '_blank', 'noopener')
             return
           }
-          setState({ activeSiteId: site.id, recognizedSiteId: null })
+          setState({ activeSiteId: site.id, recognizedSiteId: site.openIn === 'cdp' ? site.id : null })
         },
       }, site.name)),
       h('button', {
@@ -121,6 +122,7 @@ function BrowserPanel(): ReactElement {
         src: `/dsh-webrelay/proxy/${s.rid}/${activeSite.home}`,
         onLoad: onFrameLoad,
       }),
+      activeSite && activeSite.openIn === 'cdp' && h(CdpLinkageView, { site: activeSite, key: activeSite.id }),
       activeSite && activeSite.openIn === 'system' && h('div', { className: 'dsh-webrelay-system-note' },
         h('div', { style: { fontSize: '13px', lineHeight: 1.7, padding: '0 8px' } },
           `「${activeSite.name}」已设置为在当前浏览器打开（新标签页，带你的登录态）。`,

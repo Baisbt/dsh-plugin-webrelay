@@ -113,3 +113,13 @@ capture:
   dir: null
   # 面板历史默认展示条数。
   recentLimit: 30
+
+# 专用联动浏览器（CDP）设置。openIn: cdp 的站点在该实例中打开（独立配置目录，
+# 首次登录各站点后长期保持登录态，不影响你正在使用的浏览器窗口）。
+cdp:
+  port: 9222
+  # null = 自动探测 Chrome / Edge 安装路径；也可手动指定如 C:/Program Files/Google/Chrome/Application/chrome.exe
+  browserPath: null
+  startupTimeoutMs: 20000
+  # 无头模式（无窗口；自测/服务器用）。日常使用建议 false 以便正常过站点风控。
+  headless: false

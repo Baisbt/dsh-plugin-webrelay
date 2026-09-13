@@ -6,7 +6,7 @@
  * 合并为一条可编辑文本（前缀背景 + 流式追加的优化结果），用户可整体修改。
  */
 import {
-  apiContext, apiListCaptures, apiOptimize, apiSaveCapture, getState, notify, patchModal, setState, getSetDraft,
+  apiContext, apiCdpRelay, apiListCaptures, apiOptimize, apiSaveCapture, getState, notify, patchModal, setState, getSetDraft,
   type SiteInfo,
 } from './state.js'
 import { recognizeSite, relaySend } from './relay-run.js'
@@ -15,8 +15,11 @@ let optimizeAbort: AbortController | null = null
 let relayAborted = false
 
 function recognizedSite(): SiteInfo | null {
-  const { sites, recognizedSiteId } = getState()
+  const { sites, recognizedSiteId, activeSiteId } = getState()
   if (recognizedSiteId) return sites.find((s) => s.id === recognizedSiteId) ?? null
+  // CDP 联动站点没有 iframe 可识别：面板当前激活的联动站点即目标。
+  const active = sites.find((s) => s.id === activeSiteId)
+  if (active?.openIn === 'cdp') return active
   return recognizeSite(sites)
 }
 
@@ -103,23 +106,20 @@ export async function confirmSend(): Promise<void> {
   }
   relayAborted = false
   setState({ modal: { kind: 'relay-wait', status: '准备发送…' } })
-  try {
-    const result = await relaySend(site, message, (status) => {
-      const m = getState().modal
-      if (m?.kind === 'relay-wait') setState({ modal: { ...m, status } })
-    }, () => relayAborted)
+  const finish = (reply: string, url: string) => {
     setState({
       modal: {
         kind: 'capture',
-        reply: result.reply,
-        url: result.url,
+        reply,
+        url,
         site: site.id,
         siteName: site.name,
         prompt: message,
       },
     })
     void refreshHistory()
-  } catch (err) {
+  }
+  const fail = (err: unknown) => {
     setState({
       modal: {
         kind: 'relay-preview', phase: 'ready', text: message, draft: modal.draft,
@@ -127,6 +127,24 @@ export async function confirmSend(): Promise<void> {
         error: String((err as Error)?.message ?? err),
       },
     })
+  }
+  try {
+    if (site.openIn === 'cdp') {
+      // 联动模式：注入到专用浏览器的真实标签页（无取消通道，等待由 host 侧超时兜底）。
+      const m = getState().modal
+      if (m?.kind === 'relay-wait') setState({ modal: { ...m, status: '在联动浏览器中发送并等待回复…' } })
+      const r = await apiCdpRelay(site.id, message)
+      if (!r.ok || typeof r.reply !== 'string') throw new Error(r.error ?? '联动发送失败')
+      finish(r.reply, r.url ?? '')
+      return
+    }
+    const result = await relaySend(site, message, (status) => {
+      const m = getState().modal
+      if (m?.kind === 'relay-wait') setState({ modal: { ...m, status } })
+    }, () => relayAborted)
+    finish(result.reply, result.url)
+  } catch (err) {
+    fail(err)
   }
 }
 

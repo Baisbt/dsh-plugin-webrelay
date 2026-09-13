@@ -106,7 +106,8 @@ export function manageSites(body: Record<string, unknown>): { ok: boolean, error
       return { ok: true }
     }
     case 'openIn': {
-      const openIn = body.openIn === 'system' ? 'system' : 'relay'
+      const raw = typeof body.openIn === 'string' ? body.openIn : ''
+      const openIn = raw === 'system' ? 'system' : raw === 'cdp' ? 'cdp' : 'relay'
       if (!id) return { ok: false, error: '缺少站点 id' }
       withUserSites((sites) => { sites[id] = { ...asRecord(sites[id]), openIn } })
       return { ok: true }

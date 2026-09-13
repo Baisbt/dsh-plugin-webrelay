@@ -77,10 +77,14 @@ export function SiteManagerDialog(): ReactNode {
             onClick: () => void run(() => apiManage('hide', { id: site.id, hidden: !site.hidden })),
           }, site.hidden ? '显示' : '隐藏'),
           h('button', {
-            className: 'dsh-webrelay-mini', title: '打开方式：内置 iframe 或当前浏览器新标签页',
+            className: 'dsh-webrelay-mini',
+            title: '打开方式循环切换：内置（iframe，可自动注入）→ 联动（专用浏览器，可自动注入）→ 浏览器（当前浏览器，手动）',
             disabled: busy,
-            onClick: () => void run(() => apiManage('openIn', { id: site.id, openIn: site.openIn === 'system' ? 'relay' : 'system' })),
-          }, site.openIn === 'system' ? '改为内置' : '改为浏览器'),
+            onClick: () => {
+              const next = site.openIn === 'relay' ? 'cdp' : site.openIn === 'cdp' ? 'system' : 'relay'
+              void run(() => apiManage('openIn', { id: site.id, openIn: next }))
+            },
+          }, site.openIn === 'relay' ? '改为联动' : site.openIn === 'cdp' ? '改为浏览器' : '改为内置'),
           h('button', {
             className: 'dsh-webrelay-mini', title: '恢复出厂适配器与默认设置（自定义站点则整体还原为可出厂合并状态）',
             disabled: busy,

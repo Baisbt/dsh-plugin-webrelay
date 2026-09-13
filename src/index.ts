@@ -18,6 +18,8 @@
 import { loadConfig, type WebrelayConfig } from './config.js'
 import { manageSites } from './site-manage.js'
 import { CookieJar, handleProxy, parseProxyPath } from './relay.js'
+import { buildAdapterExpression, adapterTestPageHtml } from './page-adapter.js'
+import { ensureBrowser, findTab, listTargets, openSiteTab, evaluateOnTarget, detectBrowserPath, BROWSER_PROFILE_DIR } from './cdp.js'
 import { optimizePrompt, type LlmLike } from './optimize.js'
 import { listCaptures, readCapture, saveCapture } from './captures.js'
 import { registerCapturesTool } from './tools.js'
@@ -111,6 +113,117 @@ export function apply(ctx: HostContext): void {
         respondJson(res, result.ok ? 200 : 400, result)
       } catch (err) {
         respondError(res, err)
+      }
+    },
+  }))
+
+  // ── CDP 专用联动浏览器（状态 / 启动 / 打开站点 / 中继注入） ──
+  disposers.push(ctx.webServer.register({
+    kind: 'exact',
+    path: '/dsh-webrelay/api/cdp/status',
+    handler: async (req, res) => {
+      if (!trustedRequest(req)) return rejectUntrusted(res)
+      try {
+        const cfg = config()
+        const targets = await listTargets(cfg.cdp.port)
+        respondJson(res, 200, {
+          ok: true,
+          running: true,
+          port: cfg.cdp.port,
+          browserPath: cfg.cdp.browserPath ?? detectBrowserPath(),
+          profileDir: BROWSER_PROFILE_DIR,
+          targets,
+        })
+      } catch {
+        const cfg = config()
+        respondJson(res, 200, {
+          ok: true,
+          running: false,
+          port: cfg.cdp.port,
+          browserPath: cfg.cdp.browserPath ?? detectBrowserPath(),
+          profileDir: BROWSER_PROFILE_DIR,
+          targets: [],
+        })
+      }
+    },
+  }))
+
+  disposers.push(ctx.webServer.register({
+    kind: 'exact',
+    path: '/dsh-webrelay/api/cdp/launch',
+    handler: async (req, res) => {
+      if (!trustedRequest(req)) return rejectUntrusted(res)
+      try {
+        const result = await ensureBrowser(config().cdp)
+        respondJson(res, result.ok ? 200 : 400, result.ok ? { ok: true } : { ok: false, error: result.error })
+      } catch (err) {
+        respondError(res, err)
+      }
+    },
+  }))
+
+  disposers.push(ctx.webServer.register({
+    kind: 'exact',
+    path: '/dsh-webrelay/api/cdp/open',
+    handler: async (req, res) => {
+      if (!trustedRequest(req)) return rejectUntrusted(res)
+      try {
+        const body = JSON.parse((await readBody(req)) || '{}') as { siteId?: unknown }
+        const siteId = typeof body.siteId === 'string' ? body.siteId : ''
+        if (siteId.length === 0) throw new Error('siteId is required')
+        const result = await openSiteTab(config(), siteId)
+        respondJson(res, result.ok ? 200 : 400, result.ok ? { ok: true, target: result.target } : { ok: false, error: result.error })
+      } catch (err) {
+        respondError(res, err)
+      }
+    },
+  }))
+
+  disposers.push(ctx.webServer.register({
+    kind: 'exact',
+    path: '/dsh-webrelay/api/cdp/relay',
+    handler: async (req, res) => {
+      if (!trustedRequest(req)) return rejectUntrusted(res)
+      try {
+        const body = JSON.parse((await readBody(req)) || '{}') as { siteId?: unknown, message?: unknown }
+        const siteId = typeof body.siteId === 'string' ? body.siteId : ''
+        const message = typeof body.message === 'string' ? body.message : ''
+        if (siteId.length === 0) throw new Error('siteId is required')
+        if (message.trim().length === 0) throw new Error('message is required')
+        const cfg = config()
+        const ensured = await ensureBrowser(cfg.cdp)
+        if (!ensured.ok) throw new Error(ensured.error ?? '联动浏览器不可用')
+        const found = await findTab(cfg, siteId)
+        if (!found.target) throw new Error(found.error ?? '未找到联动标签页')
+        const site = cfg.sites.find((s) => s.id === siteId)
+        if (!site) throw new Error(`未知站点：${siteId}`)
+        const outcome = await evaluateOnTarget(
+          cfg.cdp.port,
+          found.target.id,
+          buildAdapterExpression(site, message),
+        ) as { ok: boolean, value?: unknown, error?: string }
+        if (!outcome.ok) throw new Error(outcome.error ?? '页面执行失败')
+        const value = outcome.value as { ok?: boolean, reply?: string, url?: string, error?: string }
+        if (!value?.ok) throw new Error(value?.error ?? '适配器执行失败')
+        respondJson(res, 200, { ok: true, reply: value.reply, url: value.url })
+      } catch (err) {
+        respondError(res, err)
+      }
+    },
+  }))
+
+  // ── 适配器自测页（最小"聊天页"夹具，配合临时站点条目验证 CDP 注入链路） ──
+  disposers.push(ctx.webServer.register({
+    kind: 'exact',
+    path: '/dsh-webrelay/adapter-test',
+    handler: (req, res) => {
+      if (!trustedRequest(req)) return rejectUntrusted(res)
+      try {
+        const html = adapterTestPageHtml()
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' })
+        res.end(html)
+      } catch {
+        try { res.end() } catch { /* gone */ }
       }
     },
   }))

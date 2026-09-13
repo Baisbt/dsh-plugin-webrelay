@@ -37,8 +37,8 @@ export interface SiteConfig {
   experimental: boolean
   /** true = 不在面板页签显示，但识别与代理仍然有效。 */
   hidden: boolean
-  /** relay = 内置 iframe（闪电按钮选项二可用）；system = 在用户当前浏览器新标签页打开（带登录态）。 */
-  openIn: 'relay' | 'system'
+  /** relay = 内置 iframe；system = 用户当前浏览器新标签页；cdp = 专用联动浏览器（可自动注入/抓取）。 */
+  openIn: 'relay' | 'system' | 'cdp'
   adapter: SiteAdapter
 }
 
@@ -62,6 +62,17 @@ export interface CaptureConfig {
   recentLimit: number
 }
 
+export interface CdpConfig {
+  /** 专用联动浏览器的调试端口。 */
+  port: number
+  /** null = 自动探测 Chrome/Edge 安装路径。 */
+  browserPath: string | null
+  /** 启动后等待调试端口就绪的超时（毫秒）。 */
+  startupTimeoutMs: number
+  /** 无头启动（默认 false；主要用于自测/服务器场景）。 */
+  headless: boolean
+}
+
 export interface WebrelayConfig {
   sites: SiteConfig[]
   /** 用户已"删除"的出厂站点 id（出厂站点无法真删，会被默认模板合并回来）。 */
@@ -69,6 +80,7 @@ export interface WebrelayConfig {
   relay: RelayConfig
   optimize: OptimizeConfig
   capture: CaptureConfig
+  cdp: CdpConfig
 }
 
 const SEND_MODES = new Set(['enter', 'click', 'enter-then-click'])
@@ -106,7 +118,7 @@ function sanitizeSite(id: string, v: unknown): SiteConfig | null {
     match,
     experimental: r.experimental === true,
     hidden: r.hidden === true,
-    openIn: r.openIn === 'system' ? 'system' : 'relay',
+    openIn: r.openIn === 'system' ? 'system' : r.openIn === 'cdp' ? 'cdp' : 'relay',
     adapter: sanitizeAdapter(r.adapter),
   }
 }
@@ -138,6 +150,16 @@ function sanitizeOptimize(v: unknown): OptimizeConfig {
   }
 }
 
+function sanitizeCdp(v: unknown): CdpConfig {
+  const r = asRecord(v)
+  return {
+    port: typeof r.port === 'number' && r.port > 0 && r.port < 65536 ? Math.floor(r.port) : 9222,
+    browserPath: typeof r.browserPath === 'string' && r.browserPath.length > 0 ? r.browserPath : null,
+    startupTimeoutMs: typeof r.startupTimeoutMs === 'number' && r.startupTimeoutMs > 0 ? r.startupTimeoutMs : 20000,
+    headless: r.headless === true,
+  }
+}
+
 function sanitizeCapture(v: unknown): CaptureConfig {
   const r = asRecord(v)
   return {
@@ -159,6 +181,7 @@ function sanitizeConfig(raw: unknown): WebrelayConfig {
     relay: sanitizeRelay(r.relay),
     optimize: sanitizeOptimize(r.optimize),
     capture: sanitizeCapture(r.capture),
+    cdp: sanitizeCdp(r.cdp),
   }
 }
 
@@ -254,6 +277,7 @@ export function loadConfig(): WebrelayConfig {
       relay: { ...defaults.relay, ...asRecord(user.relay) },
       optimize: { ...defaults.optimize, ...asRecord(user.optimize) },
       capture: { ...defaults.capture, ...asRecord(user.capture) },
+      cdp: { ...defaults.cdp, ...asRecord(user.cdp) },
     }
     const config = sanitizeConfig(merged)
     config.sites = sites

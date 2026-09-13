@@ -11,7 +11,7 @@ export interface SiteInfo {
   match: string[]
   experimental: boolean
   hidden: boolean
-  openIn: 'relay' | 'system'
+  openIn: 'relay' | 'system' | 'cdp'
   source: 'factory' | 'custom'
   adapter: {
     input: string[]
@@ -131,6 +131,61 @@ export async function refreshSitesIntoState(): Promise<{ ok: boolean, error?: st
     const sites = await fetchSites()
     setState({ sites, activeSiteId: getState().activeSiteId ?? sites.find((x) => !x.hidden)?.id ?? null })
     return { ok: true }
+  } catch (err) {
+    return { ok: false, error: String((err as Error)?.message ?? err) }
+  }
+}
+
+/** CDP 专用联动浏览器 API。 */
+export interface CdpStatus {
+  ok: boolean
+  running: boolean
+  port: number
+  browserPath: string | null
+  profileDir: string
+  targets: Array<{ id: string, title: string, url: string }>
+}
+
+export async function apiCdpStatus(): Promise<CdpStatus | null> {
+  try {
+    const res = await fetch('/dsh-webrelay/api/cdp/status')
+    return await res.json() as CdpStatus
+  } catch {
+    return null
+  }
+}
+
+export async function apiCdpLaunch(): Promise<{ ok: boolean, error?: string }> {
+  try {
+    const res = await fetch('/dsh-webrelay/api/cdp/launch', { method: 'POST' })
+    return await res.json() as { ok: boolean, error?: string }
+  } catch (err) {
+    return { ok: false, error: String((err as Error)?.message ?? err) }
+  }
+}
+
+export async function apiCdpOpen(siteId: string): Promise<{ ok: boolean, error?: string }> {
+  try {
+    const res = await fetch('/dsh-webrelay/api/cdp/open', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ siteId }),
+    })
+    return await res.json() as { ok: boolean, error?: string }
+  } catch (err) {
+    return { ok: false, error: String((err as Error)?.message ?? err) }
+  }
+}
+
+/** CDP 中继发送：在联动标签页内注入适配器并等待抓取回复（耗时可达分钟级）。 */
+export async function apiCdpRelay(siteId: string, message: string): Promise<{ ok: boolean, reply?: string, url?: string, error?: string }> {
+  try {
+    const res = await fetch('/dsh-webrelay/api/cdp/relay', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ siteId, message }),
+    })
+    return await res.json() as { ok: boolean, reply?: string, url?: string, error?: string }
   } catch (err) {
     return { ok: false, error: String((err as Error)?.message ?? err) }
   }

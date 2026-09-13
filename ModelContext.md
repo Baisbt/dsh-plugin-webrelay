@@ -8,9 +8,18 @@ DSH Web 双面插件：右侧内置浏览器（relay 反向代理同源嵌入外
 
 ## 当前进度（2026-09-13，版本 0.1.0）
 
-**M0–M4 全部完成（5 次提交）+ 二期"站点管理"已完成（见下）。**
+**M0–M4 全部完成（5 次提交）+ 二期"站点管理"已完成 + 二期"CDP 专用联动浏览器"已完成（见下）。**
 
-### 二期：站点管理（本轮新增，已实测）
+### 二期：CDP 专用联动浏览器（本轮新增，注入链路已实测）
+
+- 决策（用户确认）：专用实例模式（非附加现有浏览器）+ Chrome 自动探测（找不到时回退 Edge，可 `cdp.browserPath` 手动指定）。
+- `src/cdp.ts`：`/json/list` 发现、`/json/new`（PUT）开标签、`/json/activate` 激活、`Runtime.evaluate`（awaitPromise + returnByValue）注入；`ensureBrowser` 端口探测 + 独立配置目录 `$DSH_HOME/webrelay/browser-profile` 启动（登录态长期保存）。
+- `src/page-adapter.ts`：把 relay-run 同语义的"填入→发送→等待→抓取"编译为页面内 async IIFE；附自测页夹具路由 `/dsh-webrelay/adapter-test`（textarea+发送按钮+2.5s 假生成+回复节点）。
+- 新路由：`GET /api/cdp/status`、`POST /api/cdp/launch|open|relay`；白名单校验：只操作 URL 命中站点 `match` 的标签页。
+- client：站点打开方式三档循环（内置→联动→浏览器）；面板 CDP 联动视图（连接状态/启动/打开标签页/刷新）；闪电选项二在联动站点上走 `apiCdpRelay`。
+- **端到端实测**：headless Chrome（测试用）+ 自测页夹具——CDP 注入"填入→Enter→等待假生成→抓取回复"全链路返回成功（`回复 #1：这是CDP注入测试消息`），测试现场已清理（联动 Chrome 进程、测试站点条目、headless 标记均已还原）。
+
+### 二期：站点管理（已实测）
 
 - 面板头部「管理」按钮 → 站点管理弹窗：配置路径显性展示；添加（名称+网址自动提取域名白名单）/ 排序（↑↓ 写回 YAML）/ 隐藏（页签隐藏但识别代理仍生效）/ 打开方式（内置 relay / 当前浏览器新标签页）/ 删除（自定义真删、出厂进 `deleted:` 列表）/ 单站重置 / 恢复全部默认（整文件还原出厂模板含注释）。
 - host 新路由 `POST /dsh-webrelay/api/sites/manage`（add/remove/hide/openIn/reorder/reset-site/reset-all）；`loadConfig` 语义：用户层条目**合并**到出厂定义之上（stub 不丢 home/match）、`deleted` 同时过滤两层、用户文件顺序优先。
@@ -29,11 +38,10 @@ DSH Web 双面插件：右侧内置浏览器（relay 反向代理同源嵌入外
 
 ### 待办
 
-- [ ] **二期 CDP 系统浏览器联动**（用户已确认）：接管用户当前浏览器的真实标签页完成注入/抓取，解决嵌入/风控/登录态三大限制；站点管理的 openIn=system 模式已为其铺路。
-- [ ] ChatGPT 账号级端到端实测；豆包/千问/Gemini 选择器按真实页面微调（现为实验性）。
-- [ ] `webrelay_captures` 工具在真实会话中的调用验证（注册链路已验证，未做会话内调用）。
-- [ ] relay 对 SPA 子资源的兼容度提升（DeepSeek 页面在未登录/风控时自报"资源加载异常"；登录态下待用户实测）。
+- [ ] CDP 模式在真实 AI 站点上的账号级实测（注入链路已用自测页验证；DeepSeek/ChatGPT 登录态实测需用户操作）。
+- [ ] relay 对 SPA 子资源的兼容度提升（DeepSeek 页面在未登录/风控时自报"资源加载异常"；联动模式可绕过此限制）。
 - [ ] WebSocket 代理（v1 只 patch 了 fetch/XHR/EventSource；AI 站点流式回复主要走 SSE，暂够用）。
+- [ ] 站点管理弹窗中直接编辑 DOM 适配选择器（当前仍需手改 YAML）。
 
 ## 关键决策
 
