@@ -12,3 +12,4 @@ node_modules/
 *.log
 .DS_Store
 .zcode/
+AGENTS.md
