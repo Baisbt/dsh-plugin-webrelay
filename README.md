@@ -10,6 +10,10 @@
 - [核心功能](#核心功能)
 - [环境依赖](#环境依赖)
 - [快速开始](#快速开始)
+  - [方式 A：tarball 安装（推荐）](#方式-atarball-安装推荐)
+  - [方式 B：从 npm registry 安装](#方式-b从-npm-registry-安装)
+  - [方式 C：从 GitHub 直接安装](#方式-c从-github-直接安装)
+  - [本地开发（link 模式）](#本地开发link-模式)
 - [具体操作流程](#具体操作流程)
   - [第 0 步：准备](#第-0-步准备前置条件)
   - [第 1 步：安装依赖](#第-1-步安装依赖)
@@ -71,7 +75,7 @@
 | 依赖 | 版本 / 说明 |
 |------|------|
 | **Node.js** | 插件为 ESM 包（`"type": "module"`），需 Node 20+；本机开发用 `node` / `pnpm` |
-| **pnpm** | 唯一包管理器（仓库含 `pnpm-lock.yaml`） |
+| **pnpm** | 包管理器（仓库含 `pnpm-lock.yaml`）。**`dsh plugin add/remove` 内部就是调它**，因此使用者也需 PATH 上有 pnpm |
 | **DSH** | 需可用的 `dsh` CLI。DSH 处于 developer preview，客户端快照/契约字段可能变化 |
 | **浏览器** | 内置模式用你当前浏览器即可；**联动模式（CDP）**需本机安装 Chrome 或 Edge（未指定路径时自动探测，Windows/macOS/Linux 均已覆盖） |
 
@@ -92,6 +96,69 @@
 | `sites.default.yml` | 出厂默认配置（仓库存放于包根，随插件分发，**勿手改**） |
 
 ## 快速开始
+
+按你的身份选一条路：
+
+| 你的情况 | 走哪条 |
+|---|---|
+| 只想用插件（不改代码） | 方式 A / B / C 任选一条 |
+| 要改源码、参与开发 | [本地开发（link 模式）](#本地开发link-模式) |
+
+> 三种方式都只需一条命令。`dsh plugin --profile web add <参数>` 会把参数**原样转发给 profile 目录下的 pnpm add**，因此 pnpm 支持的来源（本地路径、tarball、registry 包名、`github:` / `git+https://`）都能用。
+
+### 方式 A：tarball 安装（推荐）
+
+**不依赖 npm 发布，也不触发构建脚本审批**——tarball 内已含构建产物 `lib/`。
+
+```sh
+# ① 在插件仓库里打出 tarball，产出 dsh-external-dsh-webrelay-<version>.tgz
+pnpm install --ignore-workspace
+pnpm pack
+
+# ② 把 .tgz 交给使用者，在其机器上执行（路径换成实际位置）
+dsh plugin --profile web add /绝对路径/dsh-external-dsh-webrelay-0.1.0.tgz
+
+# ③ 验证插件已进入配置层
+dsh web --dump-config | grep webrelay
+```
+
+**成功判断依据**：第 ② 步以 `Done in …` 结束；第 ③ 步输出含 `dsh-webrelay` 条目。
+
+**该 tarball 的实际内容**（pnpm 11.7.0 实测，共 9 项）：`lib/index.js` + `lib/client.js` 及各自 sourcemap、`sites.default.yml`、`cordis.patch.yml`、`package.json`、`README.md`、`LICENSE`——**不含 `src/`**。安装后 `lib/index.js` 可直接 import（导出 `apply`、`inject: ["webServer"]`、`name`），因为产物已预构建，整个安装过程不会请求构建脚本审批。
+
+### 方式 B：从 npm registry 安装
+
+前提：包已发布到 npm。**当前尚未发布**，且需要先拥有 `@dsh-external` 这个 scope。
+
+```sh
+dsh plugin --profile web add @dsh-external/dsh-webrelay
+```
+
+与方式 A 同理：registry tarball 同样自带 `lib/`，且 registry 安装不会触发 `prepare` 构建。
+
+### 方式 C：从 GitHub 直接安装
+
+```sh
+dsh plugin --profile web add github:Baisbt/dsh-plugin-webrelay
+```
+
+⚠️ **这条路需要额外放行一次构建脚本。** 仓库的 `lib/` 被 `.gitignore` 排除，`lib/` 是由 `package.json` 的 `prepare: tsdown` 在安装时现构建的；而 pnpm 11 默认拦截依赖的构建脚本（`strictDepBuilds` 默认 `true`）。因此**首次执行会以 `ERR_PNPM_IGNORED_BUILDS` 失败**，同时 pnpm 会把一个占位项写进 profile 的 `pnpm-workspace.yaml`：
+
+```
+$DSH_HOME/profiles/web/pnpm-workspace.yaml
+```
+
+把 pnpm 打印出来的那个 key 置为 `true`，再重跑同一条 `add` 命令即可：
+
+```yaml
+allowBuilds:
+  # 键名以 pnpm 实际打印的为准
+  <pnpm 打印的 key>: true
+```
+
+> 注意键的粒度：pnpm 11 **不接受单独写包名**来放行 git 来源的依赖，必须精确到解析出的 commit 路径；用仓库 URL 作键是 11.11.0 起才支持的能力。不想处理这一步就用方式 A。
+
+### 本地开发（link 模式）
 
 ```sh
 # 1. 安装依赖（插件目录独立于 DSH 仓库 workspace，必须加 --ignore-workspace）
@@ -205,6 +272,8 @@ node scripts/build.cjs --file ./build-out.txt # 构建输出写入文件
 ### 第 3 步：把插件装进 DSH
 
 **目的**：让 DSH 在启动时加载本插件。
+
+这里是**源码开发场景**（link 模式）的装法。普通使用者请改用 [快速开始](#快速开始) 里的方式 A / B / C（tarball / npm / GitHub），不必 clone 源码。
 
 **操作**：
 
@@ -382,15 +451,23 @@ pnpm build
 
 ### 第 9 步：发布与部署（可选）
 
-本插件是**本地插件**，通过 `link:` 方式安装，不需要发布到 npm 即可使用。「部署」在本项目语境下即上面的 link 安装流程。
+本插件是**本地插件**：走 `link:`（开发）或 [方式 A 的 tarball](#方式-atarball-安装推荐) 即可使用，**不发布到 npm 也能分发**。
 
-如需分发，`package.json#files` 已声明打包白名单：
+给外部使用者时，按目标环境选一条：
+
+| 目标 | 做法 |
+|------|------|
+| 免发布、免审批 | `pnpm pack` 出 `.tgz` 交给对方（方式 A） |
+| 有 npm 发布条件 | 发布到 registry，对方 `add @dsh-external/dsh-webrelay`（方式 B） |
+| 直接指向仓库 | 对方 `add github:Baisbt/dsh-plugin-webrelay`，需放行构建脚本（方式 C） |
+
+`package.json#files` 已声明打包白名单：
 
 ```
 lib / sites.default.yml / cordis.patch.yml / README.md / LICENSE
 ```
 
-即 `pnpm pack` 产出的 tarball 只含构建产物与配置模板，不含源码。
+即 `pnpm pack` 产出的 tarball 只含构建产物与配置模板，**不含源码**（`src/` 不在其中）。
 
 > 白名单中的 `LICENSE` 已随仓库提供（MIT，见仓库根目录 `LICENSE`）。
 
