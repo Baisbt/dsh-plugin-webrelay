@@ -6,11 +6,69 @@
 
 DSH Web 双面插件：右侧内置浏览器（relay 反向代理同源嵌入外部 AI 站点）+ 输入框闪电按钮（提示词优化 / 对话流上下文中继发送并抓取回复存档）。
 
-## 当前进度（2026-09-13，版本 0.1.0）
+## 当前进度（2026-09-14，版本 0.1.0）
 
-**M0–M4 + 站点管理 + CDP 联动 + 修复轮（单击直达/多实例/崩溃修复）全部完成。**
+**M0–M4 + 站点管理 + CDP 联动 + 修复轮 ×2 + 附件减法改造全部完成。**
 
-### 修复轮 2：浮层崩溃根因修复 + 四项用户新需求（本轮）
+### 附件减法改造（本轮）：从「承担采集与投递」降级为「只提示」
+
+**用户决策**：取消自动检测与引导上传，插件**彻底不碰文件**。当提示词可能需要附件时，
+只给一条轻量提示（说明可能需要 + 建议哪类材料），用户自己用外部浏览器自带的附件按钮上传。
+目标是最大限度降低插件复杂度与维护成本。
+
+**删除（无残留，tsc clean + 全局扫描零命中）**：
+
+- 整文件：`src/file-read.ts`（唯一读盘入口）、`src/page-attach.ts`（CDP 注入表达式）、
+  `scripts/_verify-attach.mjs`、`scripts/_verify-fileread.mjs`、`docs/file-upload-feasibility.md`（docs/ 目录已删）。
+- host：`GET /api/workspace`、`POST /api/files/read`、`POST /api/cdp/attach` 三条路由、
+  `normalizeAttachFiles()`、`readFileForAttach` / `buildAttachExpression` import、顶部路由注释两行。
+- config：`SiteAdapter.fileInput`、`sanitizeAdapter` 的 fileInput、`FileConfig`、`sanitizeFiles()`、
+  `WebrelayConfig.files`、`loadConfig()` 的 files 深合并。
+- client/state：`AttachedFile`、`SiteInfo.adapter.fileInput`、`attachedFiles`、`attachOpen`、
+  `apiCdpAttach`/`AttachResult`、`apiWorkspace`/`WorkspaceInfo`、`apiReadFile`/`ReadFileOutcome`、
+  `AttachUi` 及 `getAttachUi`/`setAttachUi`/`subscribeAttach`/`openAttachDialog`/`closeAttachDialog`/
+  `readAndAttach`/`addAttachedFile`/`removeAttachedFile`/`clearAttachedFiles`。
+- client/flow：`supportsAttachments()`、`filesSection()`/`fmtBytes()`/`composeOutbound()`/`openAttach()`、
+  `sendToBrowser()` 的附件门槛拦截 + 投附件段 + `clearAttachedFiles()`、附件相关 import。
+- client/relay-run：`attachInFrame()`、`AttachOutcome`、`AttachedFileInput`、`b64ToBytes()`、`queryFileInput()`。
+- client/modals：`AttachBar()`、`AttachOverlay()`、附件相关 import/调用。
+- client/panel：`AttachOverlay` import 与渲染行。
+- client/styles：全部 15 行 `.dsh-webrelay-attach-*` 样式。
+- `sites.default.yml`：`fileInput` 字段注释 + 5 处 `fileInput` 值 + `files:` 段。177 → 161 行。
+
+**新增（保留）—— 附件提示**：
+
+- `optimize.ts`：`ATTACH_HINT_MARK = '【附件提示】'`、`ATTACH_TAIL_INSTRUCTION`（追加进 `optimizeUserPrompt` 末尾）、
+  `splitAttachHint(text)` → `{text, hint}`、`attachHintApplies(hint)`（否定措辞 → 不展示）。
+  system prompt 的输出要求加了一句例外（允许末尾那行）。
+- `state.ts`：`ModalState` 的 `optimize` / `relay-preview` 各加 `attachHint?: string`。
+- `flow.ts`：`streamOptimizeInto()` 收尾时剥离尾注，正文走 `text`，提示走 `attachHint`；
+  `insertOptimized()` 也过一遍 `splitAttachHint()` 兜底。
+- `modals.ts`：`AttachHint(hint)` 渲染成 `.dsh-webrelay-hint` 提示条（**纯文案无控件**），
+  `OptimizeDialog` 与 `RelayPreviewDialog` 各插一处。
+- `styles.ts`：`.dsh-webrelay-hint` / `[data-warn]` / `-icon`。
+
+**设计要点**：提示由优化器顺带产出（语义判断比关键词规则准），放尾注而非正文（正文要外发给另一个模型，
+不能被元信息污染）；流式中标记未到齐时原样渲染，标记一出现立即截断。
+
+**验证**：`tsc --noEmit` clean；`tsdown` 双 bundle 成功（client 92.87 kB / index 334.39 kB，
+较改造前 110.88 / 348.82 均有下降）；全局扫描确认附件旧功能零残留（41 处命中全部属于新提示功能）。
+
+**顺带修好的工具脚本**：`scripts/check.cjs` / `scripts/build.cjs` 加 `--file <path>` 参数，
+直接把结果写文件——绕开本机终端输出捕获为空的坑（原先只能肉眼看 stdout，长输出会被截断）。
+
+### 附件轮（已废弃，改造中被移除）：随消息附加文件 + 站点识别双源真相修复
+
+> 以下内容仅作历史记录，对应代码已全部删除。
+
+- **修复：菜单不识别站点而面板识别了**。根因是"双源真相"——闪电菜单只读 `recognizedSiteId`，而 CDP 模式没有 iframe（`onLoad` 不触发识别）。修复：`flow.ts` 导出共享的 `resolveTargetSite()`（三来源优先级），`panel.ts` 两处补写识别结果。**这条修复保留至今**。
+- 曾实现：`src/file-read.ts`（读盘）、`src/page-attach.ts`（CDP 注入）、`attachInFrame()`（relay 注入）、
+  三条读盘/投递路由、`AttachBar`/`AttachOverlay` 浮层、`adapter.fileInput` 能力门槛。均已删除。
+- 已验证的负面证据（仍值得记住）：`DOM.setFileInputFiles` 因为 `evaluateOnTarget()` 是单请求单响应结构
+  （硬编码 `id: 1`）而**不可用**；`DataTransfer` 注入在 relay 路径**必须用 iframe realm** 构造
+  `File`/`Blob`/`Event`，否则 React 受控组件会挡下跨 realm 对象。
+
+### 修复轮 2：浮层崩溃根因修复 + 四项用户新需求
 
 - **浮层"关闭且无法再打开"根因确认**：React #300（hook 数量跨渲染变化）——`useEscape` 只在 optimize/relay-preview 弹窗里调用（作为 ModalRoot 内联函数的 hook），弹窗切换到 relay-wait/capture 时 hook 数变少 → 弹窗子树崩溃 → 旧版无边界时整个浮层（含面板）被 React 卸载。修复：`useEscape` 提升到 ModalRoot 顶层无条件调用（sites 弹窗禁用 Esc）；**OverlayBoundary 错误边界**分域包裹 modal/panel 子树（崩溃降级为可"恢复"的错误卡片）；用户场景吻合：DeepSeek 设为联动 → 选项二发送 → 弹窗切到等待态即崩，后台 CDP 抓取完成但捕获弹窗永远出不来（= 用户第 4 条需求的由来）。
 - **取消语义重做**：confirmSend 保存预览快照（lastPreview）+ 完成守卫（stillWaiting：用户取消后迟到的结果不覆盖界面）；「取消并撤回」立即恢复预览（编辑内容不丢）。CDP 分支的在途请求由守卫兜底。
@@ -56,6 +114,11 @@ DSH Web 双面插件：右侧内置浏览器（relay 反向代理同源嵌入外
 
 ### 待办
 
+- [x] **附件减法改造 —— 已完成**。插件不再承担文件采集与处理：删掉全部读盘/注入代码，
+  改为「优化器顺带产出一条附件提示」的纯文案方案。
+- [ ] 附件提示的**实际效果观察**：目前是让优化器自行判断「是否需要附件」，需在真实草稿上
+  积累几十条样本，看误报（不需要却说需要）与漏报（需要却说无需）的比例；
+  若误报偏高，考虑在 `ATTACH_TAIL_INSTRUCTION` 里加更具体的反例。
 - [ ] CDP 模式在真实 AI 站点上的账号级实测（注入链路已用自测页验证；DeepSeek/ChatGPT 登录态实测需用户操作）。
 - [ ] relay 对 SPA 子资源的兼容度提升（DeepSeek 页面在未登录/风控时自报"资源加载异常"；联动模式可绕过此限制）。
 - [ ] WebSocket 代理（v1 只 patch 了 fetch/XHR/EventSource；AI 站点流式回复主要走 SSE，暂够用）。

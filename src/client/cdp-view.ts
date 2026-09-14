@@ -86,7 +86,7 @@ export function CdpLinkageView({ site }: { site: SiteInfo }): ReactElement {
           ? `联动标签页：${siteTab.title || siteTab.url}`
           : instance?.running ? '尚无该站点的联动标签页' : '启动后将在联动浏览器中打开站点（首次需登录一次）'),
       h('div', { style: { opacity: 0.55, fontSize: '11px', marginTop: '4px' } },
-        '在联动模式下，闪电按钮「整理上下文并发送到浏览器」会注入到真实标签页并抓取回复。'),
+        '在联动模式下，闪电按钮「与外部 AI 协作优化」会在真实标签页里填写并发送你的提示词，等待回复完成后只读捕捉，再整合成终稿写入输入框。'),
       error !== null && h('div', { className: 'dsh-webrelay-error', style: { marginTop: '6px' } }, error),
     ),
     h('div', { style: { display: 'flex', gap: '8px', marginTop: '12px', flexWrap: 'wrap' } },
@@ -116,7 +116,7 @@ export function CdpLinkageView({ site }: { site: SiteInfo }): ReactElement {
     h('div', { className: 'dsh-webrelay-capture-list' },
       h('div', { className: 'dsh-webrelay-browsers-head' }, `捕获记录（${site.name}）`),
       captures.length === 0
-        ? h('div', { style: { fontSize: '12px', opacity: 0.55, padding: '2px 0' } }, '暂无捕获：用闪电按钮发送后，回复会存档在这里')
+        ? h('div', { style: { fontSize: '12px', opacity: 0.55, padding: '2px 0' } }, '暂无捕获：保存过的抓取结果会存档在这里')
         : captures.map((c) => h('button', {
           key: c.file,
           className: 'dsh-webrelay-history-item',

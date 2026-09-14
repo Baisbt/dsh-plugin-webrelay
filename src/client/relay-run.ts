@@ -1,8 +1,11 @@
 /**
- * dsh-webrelay —— iframe DOM 适配执行器。
+ * dsh-webrelay —— iframe 页面读写器。
  *
  * 面板 iframe 经 relay 同源加载，父页可直接访问 contentDocument。
- * 全部选择器来自站点配置（候选链，按序取第一个命中者），站点改版改配置即可。
+ *   - 读：captureFromFrame（抓当前页正文）——只读，随时可用。
+ *   - 写：sendToFrame（填入 → 提交 → 等待生成结束 → 取回回复）——**仅在用户
+ *     点击闪电按钮后**调用，用于选项二 S3/S4 的外发闭环。
+ * 全部选择器来自站点配置，站点改版改配置即可。
  */
 import type { SiteInfo } from './state.js'
 
@@ -45,60 +48,188 @@ export function recognizeSite(sites: SiteInfo[]): SiteInfo | null {
   return hit ?? null
 }
 
-function queryOne(doc: Document, selectors: string[], visibleOnly = true): Element | null {
-  for (const sel of selectors) {
+/**
+ * 捕捉 iframe 当前页面的正文文本（选项二第一步，relay 模式）。
+ *
+ * 抓取策略：优先用站点配置的 replies 选择器（拿到的是「干净」的对话/正文节点）；
+ * 未命中则退化为 body.innerText（噪声多，交给后续 LLM 整理阶段清洗）。
+ * 全程只读，不注入、不发送。
+ */
+export function captureFromFrame(site: SiteInfo): { ok: boolean, raw?: string, url?: string, error?: string } {
+  const win = frameWindow()
+  const doc = frameEl?.contentDocument ?? null
+  if (!win || !doc) return { ok: false, error: '浏览器面板尚未加载出目标网页' }
+
+  const url = currentTarget()?.href ?? ''
+  // 1) 首选：站点配置的回复/正文节点选择器（多节点用分隔线拼接，保留对话顺序）。
+  const parts: string[] = []
+  for (const sel of site.adapter.replies) {
     let els: NodeListOf<Element>
-    try {
-      els = doc.querySelectorAll(sel)
-    } catch {
-      continue // 用户配置了非法选择器：跳过该候选
-    }
+    try { els = doc.querySelectorAll(sel) } catch { continue }
+    if (els.length === 0) continue
     for (const el of els) {
-      if (!visibleOnly || isVisible(el)) return el
+      const text = (el as HTMLElement).innerText?.trim() ?? ''
+      if (text.length > 0) parts.push(text)
+    }
+    break // 命中第一个可用选择器即可
+  }
+  if (parts.length > 0) {
+    return { ok: true, raw: parts.join('\n\n---\n\n'), url }
+  }
+  // 2) 兜底：整页 innerText（噪声多，但至少不丢内容）。
+  const body = (doc.body as HTMLElement | null)?.innerText?.trim() ?? ''
+  if (body.length === 0) return { ok: false, error: '页面正文为空（站点可能仍在加载或已改版）' }
+  return { ok: true, raw: body, url }
+}
+
+export interface SendOutcome {
+  ok: boolean
+  /** 抓到的回复正文（超时但抓到部分内容时也带上）。 */
+  reply: string
+  url?: string
+  /** true = 等待超时（可能已抓到部分内容，由调用方决定续等还是采用）。 */
+  timedOut?: boolean
+  error?: string
+}
+
+/**
+ * 向 iframe 内的外部站点发送一条消息，并等待其回复完成（选项二 S3+S4）。
+ *
+ * 只在**已存在**的页面上操作（续接当前对话，不导航、不新建会话）。
+ * **本函数会代用户提交内容**，仅应在用户点击闪电按钮后调用。
+ */
+export async function sendToFrame(site: SiteInfo, message: string, timeoutMs: number): Promise<SendOutcome> {
+  const win = frameWindow()
+  const doc = frameEl?.contentDocument ?? null
+  if (!win || !doc) return { ok: false, reply: '', error: '浏览器面板尚未加载出目标网页' }
+  const url = currentTarget()?.href ?? ''
+  if (message.trim().length === 0) return { ok: false, reply: '', url, error: '待发送内容为空' }
+
+  const input = queryOne(doc, site.adapter.input)
+  if (!input) {
+    return { ok: false, reply: '', url, error: '未找到对话框输入框（可在 sites.yml 修正该站点的 adapter.input 选择器）' }
+  }
+
+  const baseline = lastReplyText(doc, site)
+  const before = replyCount(doc, site)
+
+  if (isTextareaLike(input)) {
+    fillTextarea(input as HTMLTextAreaElement, message)
+  } else if (site.adapter.inputContentEditable || (input as HTMLElement).isContentEditable) {
+    fillEditable(input, message, win)
+  } else {
+    fillTextarea(input as HTMLTextAreaElement, message)
+  }
+  await sleep(400)
+
+  const mode = site.adapter.sendMode
+  if (mode === 'click') {
+    if (!clickSend(doc, site)) {
+      return { ok: false, reply: '', url, error: '未找到发送按钮（可修正 adapter.send 或把 sendMode 改为 enter）' }
+    }
+  } else {
+    pressEnter(input)
+    if (mode === 'enter-then-click') {
+      await sleep(600)
+      clickSend(doc, site)
     }
   }
-  return null
+
+  const deadline = Date.now() + timeoutMs
+  let sawGenerating = false
+  let stable = 0
+  let lastText = ''
+  while (Date.now() < deadline) {
+    await sleep(500)
+    if (generating(doc, site)) {
+      sawGenerating = true
+      stable = 0
+      continue
+    }
+    const text = lastReplyText(doc, site)
+    // 完成判据：内容非空、与发送前基线不同、连续三次稳定（生成已收尾）。
+    if (text.length > 0 && text !== baseline) {
+      if (text === lastText) stable++
+      else { stable = 1; lastText = text }
+      if (stable >= 3 && (sawGenerating || replyCount(doc, site) > before)) {
+        return { ok: true, reply: text, url, timedOut: false }
+      }
+    } else {
+      stable = 0
+    }
+  }
+  const partial = lastReplyText(doc, site)
+  const gotNew = partial.length > 0 && partial !== baseline
+  return {
+    ok: false,
+    reply: gotNew ? partial : '',
+    url,
+    timedOut: true,
+    error: gotNew
+      ? '等待外部回复超时（已抓到部分内容，可继续等待或直接采用）'
+      : '等待外部回复超时：站点可能已改版（修正 adapter.replies / adapter.generating），或发送未成功',
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 function isVisible(el: Element): boolean {
   const rect = el.getBoundingClientRect()
   if (rect.width <= 0 || rect.height <= 0) return false
-  const style = (frameWindow() as Window & { getComputedStyle?: (el: Element) => CSSStyleDeclaration }).getComputedStyle?.(el)
-  return style ? style.visibility !== 'hidden' && style.display !== 'none' : true
+  const style = globalThis.getComputedStyle(el)
+  return style.visibility !== 'hidden' && style.display !== 'none'
 }
 
-function nativeSetText(el: HTMLTextAreaElement, text: string): void {
-  // 父 window 的原生 value setter 可跨 realm 作用于 iframe 内元素；
-  // input 事件冒泡到站点框架（监听器在 iframe 文档内）触发其 onChange。
-  const desc = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')
+function queryOne(doc: Document, selectors: string[]): Element | null {
+  for (const sel of selectors) {
+    let els: NodeListOf<Element>
+    try { els = doc.querySelectorAll(sel) } catch { continue }
+    for (const el of els) if (isVisible(el)) return el
+  }
+  return null
+}
+
+function isTextareaLike(el: Element): boolean {
+  return el.tagName === 'TEXTAREA' || el.tagName === 'INPUT'
+}
+
+function fillTextarea(el: HTMLTextAreaElement | HTMLInputElement, text: string): void {
+  // React 受控组件必须走原型 setter，否则 value 变更被其内部状态覆盖。
+  const proto = el.tagName === 'INPUT' ? HTMLInputElement.prototype : HTMLTextAreaElement.prototype
+  const desc = Object.getOwnPropertyDescriptor(proto, 'value')
   if (desc?.set) desc.set.call(el, text)
   else el.value = text
   el.dispatchEvent(new Event('input', { bubbles: true }))
 }
 
-function contentEditableSet(win: Window, el: Element, text: string): void {
-  el.dispatchEvent(new FocusEvent('focus', { bubbles: true }))
-  ;(el as HTMLElement).focus?.()
-  const doc = el.ownerDocument
+function fillEditable(el: Element, text: string, win: Window): void {
+  // 事件构造器须用 iframe 自身的 realm，否则某些站点（React 受控）不认。
+  const realm = win as unknown as {
+    FocusEvent: new (type: string, init?: FocusEventInit) => FocusEvent
+    InputEvent: new (type: string, init?: InputEventInit) => InputEvent
+  }
+  el.dispatchEvent(new realm.FocusEvent('focus', { bubbles: true }))
+  ;(el as HTMLElement).focus()
   const sel = win.getSelection()
-  const range = doc.createRange()
+  if (!sel) return
+  const range = win.document.createRange()
   range.selectNodeContents(el)
-  sel?.removeAllRanges()
-  sel?.addRange(range)
-  // execCommand 走浏览器原生编辑管线，对 Lexical/ProseMirror 类编辑器最兼容。
+  sel.removeAllRanges()
+  sel.addRange(range)
   let ok = false
-  try { ok = doc.execCommand('insertText', false, text) } catch { ok = false }
+  try { ok = win.document.execCommand('insertText', false, text) } catch { ok = false }
   if (!ok) {
-    ;(el as HTMLElement).textContent = text
-    el.dispatchEvent(new InputEvent('input', { bubbles: true, data: text, inputType: 'insertText' }))
+    el.textContent = text
+    el.dispatchEvent(new realm.InputEvent('input', { bubbles: true, data: text, inputType: 'insertText' }))
   }
 }
 
-function pressEnter(win: Window, el: Element): void {
-  const init: KeyboardEventInit = { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }
+function pressEnter(el: Element): void {
+  const init = { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true }
   el.dispatchEvent(new KeyboardEvent('keydown', init))
   el.dispatchEvent(new KeyboardEvent('keyup', init))
-  void win
 }
 
 function clickSend(doc: Document, site: SiteInfo): boolean {
@@ -109,14 +240,13 @@ function clickSend(doc: Document, site: SiteInfo): boolean {
 }
 
 function replyCount(doc: Document, site: SiteInfo): number {
-  let count = 0
   for (const sel of site.adapter.replies) {
     try {
-      count = doc.querySelectorAll(sel).length
-      if (count > 0) break
-    } catch { /* invalid selector */ }
+      const n = doc.querySelectorAll(sel).length
+      if (n > 0) return n
+    } catch { /* 选择器无效，试下一个 */ }
   }
-  return count
+  return 0
 }
 
 function lastReplyText(doc: Document, site: SiteInfo): string {
@@ -132,75 +262,5 @@ function lastReplyText(doc: Document, site: SiteInfo): string {
 }
 
 function generating(doc: Document, site: SiteInfo): boolean {
-  return queryOne(doc, site.adapter.generating) !== null
-}
-
-export interface RelayRunResult {
-  reply: string
-  url: string
-}
-
-/**
- * 执行一次中继发送：填入 → 发送 → 等待生成结束 → 抓取最后回复。
- * onStatus 每步回报；abort 为真时立即停止。
- */
-export async function relaySend(site: SiteInfo, message: string, onStatus: (status: string) => void, abort: () => boolean): Promise<RelayRunResult> {
-  const win = frameWindow()
-  const doc = frameEl?.contentDocument ?? null
-  if (!win || !doc) throw new Error('浏览器面板尚未加载出目标网页')
-
-  onStatus('寻找输入框…')
-  const input = queryOne(doc, site.adapter.input)
-  if (!input) throw new Error('未找到对话框输入框（可在 sites.yml 修正该站点的 adapter.input 选择器）')
-
-  onStatus('填入内容…')
-  if (input.tagName === 'TEXTAREA') {
-    nativeSetText(input as HTMLTextAreaElement, message)
-  } else if (site.adapter.inputContentEditable || (input as HTMLElement).isContentEditable) {
-    contentEditableSet(win, input, message)
-  } else {
-    nativeSetText(input as HTMLTextAreaElement, message)
-  }
-  await sleep(400)
-
-  onStatus('发送…')
-  const mode = site.adapter.sendMode
-  if (mode === 'click') {
-    if (!clickSend(doc, site)) throw new Error('未找到发送按钮（可修正 adapter.send 或把 sendMode 改为 enter）')
-  } else {
-    pressEnter(win, input)
-    if (mode === 'enter-then-click') {
-      await sleep(600)
-      clickSend(doc, site) // Enter 无效时兜底点一次；按钮不存在则忽略
-    }
-  }
-
-  const before = replyCount(doc, site)
-  onStatus('等待生成完成…')
-  const deadline = Date.now() + 180_000
-  let stable = 0
-  let lastText = ''
-  while (Date.now() < deadline) {
-    if (abort()) throw new Error('已取消')
-    await sleep(500)
-    const busy = generating(doc, site)
-    const text = lastReplyText(doc, site)
-    if (!busy && text.length > 0) {
-      if (text === lastText) stable++
-      else stable = 0
-      lastText = text
-      if (stable >= 3 && (replyCount(doc, site) > before || before === 0)) break
-    } else {
-      stable = 0
-    }
-  }
-  if (lastText.length === 0) {
-    throw new Error('等待超时且未抓取到回复：站点可能已改版（可修正 adapter.replies / adapter.generating），或发送未成功')
-  }
-  onStatus('抓取完成')
-  return { reply: lastText, url: currentTarget()?.href ?? '' }
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
+  return site.adapter.generating.length > 0 && queryOne(doc, site.adapter.generating) !== null
 }

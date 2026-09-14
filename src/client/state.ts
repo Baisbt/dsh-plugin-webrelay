@@ -34,12 +34,35 @@ export interface CaptureMeta {
   prompt: string
 }
 
-/** 弹窗状态机：优化 → 中继预览 → 中继等待 → 捕获结果。 */
+/**
+ * 弹窗状态机（选项二六阶段闭环）：
+ *   compress       S1 上下文压缩（流式，内部步骤，短时展示）
+ *   optimize       S2 第一次优化（初稿，待外发）→ 可编辑 → 发送
+ *   relay-wait     S3/S4 发送中 / 等待回复中（带倒计时，可取消）
+ *   relay-preview  S5 第二次优化（终稿）→ 可编辑 → 插入输入框
+ * 另：sites 管理、extract 历史单轮整理、capture 存档读取。
+ *
+ * `attachHint` 是优化器在正文之外追加的一行「附件提示」：当这条提示词可能
+ * 需要用户提供文件（日志、截图、数据表…）时提醒一句。插件**只提示、不采集**——
+ * 用户自行用目标页面自带的上传按钮完成上传。
+ */
 export type ModalState =
   | { kind: 'sites' }
-  | { kind: 'optimize', phase: 'streaming' | 'ready', text: string, draft: string, gen: number, error?: string }
-  | { kind: 'relay-preview', phase: 'streaming' | 'ready', text: string, draft: string, context: string, prefix: string, gen: number, error?: string }
-  | { kind: 'relay-wait', status: string }
+  | { kind: 'optimize', phase: 'streaming' | 'ready', text: string, draft: string, gen: number, attachHint?: string, error?: string }
+  | { kind: 'extract', phase: 'streaming' | 'ready', text: string, raw: string, site: string, siteName: string, url: string, intent: string, gen: number, error?: string }
+  | {
+    kind: 'relay-preview', phase: 'streaming' | 'ready', text: string,
+    draft: string, context: string, externalReply: string, prefix: string, gen: number, attachHint?: string, error?: string,
+  }
+  | {
+    kind: 'relay-wait', status: string,
+    /** 剩余秒数（client 每秒递减；0 = 不显示倒计时）。 */
+    remain?: number,
+    /** true = 超时后进入"可续等"态（展示续等/采用按钮）。 */
+    timedOut?: boolean,
+    /** 超时但已抓到的部分回复。 */
+    partial?: string,
+  }
   | { kind: 'capture', reply: string, url: string, site: string, siteName: string, prompt: string, savedFile?: string }
 
 export interface WebrelayState {
@@ -105,7 +128,7 @@ export function setState(patch: Partial<WebrelayState>): void {
   for (const listener of listeners) listener()
 }
 
-export function patchModal(patch: Partial<Extract<ModalState, { kind: 'optimize' | 'relay-preview' }>> | Partial<Extract<ModalState, { kind: 'capture' }>>): void {
+export function patchModal(patch: Partial<Extract<ModalState, { kind: 'optimize' | 'extract' | 'relay-preview' | 'relay-wait' }>> | Partial<Extract<ModalState, { kind: 'capture' }>>): void {
   if (!state.modal) return
   setState({ modal: { ...state.modal, ...patch } as ModalState })
 }
@@ -200,15 +223,15 @@ export async function apiCdpOpen(siteId: string): Promise<{ ok: boolean, error?:
   }
 }
 
-/** CDP 中继发送：在联动标签页内注入适配器并等待抓取回复（耗时可达分钟级）。 */
-export async function apiCdpRelay(siteId: string, message: string): Promise<{ ok: boolean, reply?: string, url?: string, error?: string }> {
+/** CDP 捕捉：读取联动标签页当前正文（不发送、不注入）。 */
+export async function apiCdpCapture(siteId: string): Promise<{ ok: boolean, raw?: string, url?: string, error?: string }> {
   try {
-    const res = await fetch('/dsh-webrelay/api/cdp/relay', {
+    const res = await fetch('/dsh-webrelay/api/cdp/capture', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ siteId, message }),
+      body: JSON.stringify({ siteId }),
     })
-    return await res.json() as { ok: boolean, reply?: string, url?: string, error?: string }
+    return await res.json() as { ok: boolean, raw?: string, url?: string, error?: string }
   } catch (err) {
     return { ok: false, error: String((err as Error)?.message ?? err) }
   }
@@ -236,8 +259,15 @@ export async function fetchSites(): Promise<SiteInfo[]> {
   return body.sites
 }
 
-/** 优化请求：text/plain chunked 流，onDelta 逐段回调，返回聚合全文。 */
-export async function apiOptimize(payload: { draft: string, context?: string }, onDelta: (delta: string) => void, signal?: AbortSignal): Promise<string> {
+/**
+ * 优化请求：text/plain chunked 流，onDelta 逐段回调，返回聚合全文。
+ * phase='outbound' 为选项二第一次优化，'final' 为第二次（须带 externalReply）。
+ */
+export async function apiOptimize(
+  payload: { draft: string, context?: string, externalReply?: string, phase?: 'single' | 'outbound' | 'final' },
+  onDelta: (delta: string) => void,
+  signal?: AbortSignal,
+): Promise<string> {
   const res = await fetch('/dsh-webrelay/api/optimize', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -265,6 +295,128 @@ export async function apiOptimize(payload: { draft: string, context?: string }, 
     }
   }
   return full.trim()
+}
+
+/**
+ * 上下文压缩请求（选项二 S1）：流式。返回压缩后的背景，null 表示无可用历史。
+ * 末尾可能附带 `[dsh-webrelay:fallback] …`（降级/无历史提示），在此剥离。
+ */
+export async function apiCompress(
+  payload: { sessionId?: string, transcript?: string, draft?: string, limit?: number },
+  onDelta?: (delta: string) => void,
+  signal?: AbortSignal,
+): Promise<{ context: string | null, note?: string }> {
+  const res = await fetch('/dsh-webrelay/api/compress', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+    signal,
+  })
+  if (!res.ok || !res.body) {
+    let message = `HTTP ${res.status}`
+    try {
+      const err = await res.json() as { error?: string }
+      if (err.error) message = err.error
+    } catch { /* ignore */ }
+    throw new Error(message)
+  }
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let full = ''
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    const delta = decoder.decode(value, { stream: true })
+    if (delta.length > 0) {
+      const before = visibleText(full).length
+      full += delta
+      const after = visibleText(full)
+      if (onDelta && after.length > before) onDelta(after.slice(before))
+    }
+  }
+  const { visible, reason } = splitFallback(full)
+  const context = visible.trim()
+  return { context: context.length > 0 ? context : null, note: reason }
+}
+
+/** 外发结果（选项二 S3+S4）。timedOut=true 表示超时（reply 可能已有部分内容）。 */
+export interface RelaySendResult {
+  ok: boolean
+  reply: string
+  url?: string
+  timedOut?: boolean
+  error?: string
+}
+
+/** CDP 联动模式外发：填入 → 提交 → 等待回复（仅用户点击后调用）。 */
+export async function apiCdpSend(siteId: string, message: string, timeoutMs: number): Promise<RelaySendResult> {
+  try {
+    const res = await fetch('/dsh-webrelay/api/cdp/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ siteId, message, timeoutMs }),
+    })
+    const body = await res.json() as RelaySendResult
+    return body
+  } catch (err) {
+    return { ok: false, reply: '', error: String((err as Error)?.message ?? err) }
+  }
+}
+
+/**
+ * 抓取内容二次提取请求：text/plain chunked 流，onDelta 逐段回调。
+ * 末尾可能附带 `[dsh-webrelay:fallback] …` 注释行（host 降级提示），在此剥离并回报。
+ */
+export async function apiExtract(
+  payload: { raw: string, siteName?: string, url?: string },
+  onDelta: (delta: string) => void,
+  signal?: AbortSignal,
+): Promise<{ text: string, fallbackReason?: string }> {
+  const res = await fetch('/dsh-webrelay/api/extract', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+    signal,
+  })
+  if (!res.ok || !res.body) {
+    let message = `HTTP ${res.status}`
+    try {
+      const err = await res.json() as { error?: string }
+      if (err.error) message = err.error
+    } catch { /* ignore */ }
+    throw new Error(message)
+  }
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let full = ''
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    const delta = decoder.decode(value, { stream: true })
+    if (delta.length > 0) {
+      // 降级标记可能跨 chunk 到达：先累积，再只把标记之前的正文增量交给 onDelta。
+      const before = visibleText(full).length
+      full += delta
+      const after = visibleText(full)
+      if (after.length > before) onDelta(after.slice(before))
+    }
+  }
+  const { visible, reason } = splitFallback(full)
+  return { text: visible.trim(), fallbackReason: reason }
+}
+
+const FALLBACK_MARK = '[dsh-webrelay:fallback]'
+
+/** 标记之前的部分（即正文）。 */
+function visibleText(text: string): string {
+  const idx = text.indexOf(FALLBACK_MARK)
+  return idx < 0 ? text : text.slice(0, idx)
+}
+
+function splitFallback(text: string): { visible: string, reason?: string } {
+  const idx = text.indexOf(FALLBACK_MARK)
+  if (idx < 0) return { visible: text }
+  return { visible: text.slice(0, idx).trim(), reason: text.slice(idx + FALLBACK_MARK.length).trim() || undefined }
 }
 
 export async function apiContext(sessionId: string): Promise<string | null> {

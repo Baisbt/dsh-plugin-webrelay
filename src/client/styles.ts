@@ -24,6 +24,13 @@ export const STYLES = `
 }
 .dsh-webrelay-menu-item:hover { background: color-mix(in srgb, currentColor 10%, transparent); }
 .dsh-webrelay-menu-item[disabled] { opacity: 0.45; cursor: not-allowed; }
+/* 未就绪但仍可点击：用于「🔗 连接外部浏览器」，与真正的禁用项区分开。 */
+.dsh-webrelay-menu-item[data-connect="true"] {
+  opacity: 1; cursor: pointer;
+  color: var(--dsh-accent, #6aa8ff);
+  background: color-mix(in srgb, var(--dsh-accent, #6aa8ff) 9%, transparent);
+}
+.dsh-webrelay-menu-item[data-connect="true"]:hover { background: color-mix(in srgb, var(--dsh-accent, #6aa8ff) 16%, transparent); }
 .dsh-webrelay-menu-note { padding: 4px 10px 6px; font-size: 11px; opacity: 0.6; }
 
 .dsh-webrelay-panel {
@@ -143,6 +150,22 @@ export const STYLES = `
   background: color-mix(in srgb, currentColor 6%, transparent);
   border: 1px solid color-mix(in srgb, currentColor 14%, transparent); border-radius: 8px;
 }
+/* ── 工作流提示（「本次提示词可能需要附件」等轻量告知） ── */
+/* 纯文案行：不承载任何操作，也不触发任何文件读写，因此刻意做得极轻。 */
+.dsh-webrelay-hint {
+  display: flex; align-items: flex-start; gap: 6px;
+  padding: 6px 9px; border-radius: 8px; font-size: 11px; line-height: 1.6;
+  background: color-mix(in srgb, #4c7dff 8%, transparent);
+  border: 1px solid color-mix(in srgb, #4c7dff 22%, transparent);
+  opacity: 0.9;
+}
+.dsh-webrelay-hint[data-warn] {
+  background: color-mix(in srgb, #ea8600 10%, transparent);
+  border-color: color-mix(in srgb, #ea8600 30%, transparent);
+}
+.dsh-webrelay-hint-icon { flex: none; }
+.dsh-webrelay-hint > span:last-child { flex: 1; }
+
 .dsh-webrelay-system-note {
   position: absolute; inset: 0; display: flex; flex-direction: column;
   align-items: center; justify-content: center; text-align: center;

@@ -1,7 +1,7 @@
 {
   "name": "@dsh-external/dsh-webrelay",
   "version": "0.1.0",
-  "description": "DSH Web 中继插件：右侧内置浏览器（relay 反向代理同源嵌入外部 AI 站点）+ 输入框闪电按钮（提示词优化 / 对话流上下文中继发送并抓取回复存档）。",
+  "description": "DSH Web 中继插件：右侧内置浏览器（relay 反向代理同源嵌入外部 AI 站点）+ 输入框闪电按钮（提示词优化 / 与外部 AI 协作优化：压缩上下文→初优化→外发→收回回复→终优化→写入输入框）。",
   "keywords": [
     "dsh",
     "dsh-plugin",

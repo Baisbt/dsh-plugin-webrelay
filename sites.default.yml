@@ -14,6 +14,10 @@
 #     sendMode              enter | click | enter-then-click
 #     replies               助手回复节点候选（抓取最后一个可见节点文本）
 #     generating            生成中标记候选（出现表示仍在输出；全部消失且回复数稳定 → 视为完成）
+#
+# 说明：附件上传**不由本插件承担**。当提示词可能需要文件时，插件只在弹窗里提示
+# 一句「本次提示词可能需要附件」并点明大致需要哪类材料；实际上传请在外部浏览器里
+# 用页面自带的附件按钮完成。因此这里没有附件控件相关配置。
 
 sites:
   deepseek:
@@ -106,6 +110,29 @@ optimize:
   maxTokens: 4096
   # off = 关闭思考链，避免推理 token 耗尽 maxTokens（deepseek adapter 支持 off/low/high/max）。
   reasoningEffort: off
+  # 优化风格：
+  #   preserve   贴着原文语气做小切口改写（默认；结果自然、不套模板）
+  #   structured 允许分节结构化重排（适合复杂任务，结果更规整）
+  style: preserve
+  # 追加给优化器的结构偏好（用户自定义，优先级高于 style）；null = 不加额外约束。
+  # 例：structureHint: "输出必须是可直接放进 API 的 JSON，含 schema 说明"
+  structureHint: null
+
+  # ── 捕捉内容的二次提取（整理）──
+  # null = 沿用上面的 provider/model 自动解析。
+  extractProvider: null
+  extractModel: null
+  # 整理温度低于优化温度：倾向忠实还原而非发挥。
+  extractTemperature: 0.2
+  extractMaxTokens: 8192
+
+  # ── 与外部 AI 协作（选项二双轮闭环）──
+  # 流程：压缩对话上下文 → 第一次优化 → 发送到外部浏览器 → 等待并捕捉回复
+  #       → 第二次优化（消化回复）→ 写入输入框（不自动发送）。
+  # 等待外部回复的上限（毫秒）。超时不判失败：弹窗会给出「继续等待 / 采用已抓内容」。
+  relayTimeoutMs: 120000
+  # 上下文压缩读取的对话条数（越大背景越完整，token 消耗越高）。
+  contextLimit: 40
 
 # 捕获存档设置。
 capture:

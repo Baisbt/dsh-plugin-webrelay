@@ -69,7 +69,13 @@ function BrowserPanel(): ReactElement {
     if (s.sites.length === 0 || visibleSites.length === 0) {
       void refreshSites()
     } else if (s.activeSiteId === null) {
-      setState({ activeSiteId: s.sites.find((x) => !x.hidden)?.id ?? null })
+      // 自动选中首个可见站点；若是联动（CDP）站点，同步写 recognizedSiteId，
+      // 否则闪电菜单会因 recognizedSiteId 恒为 null 而误判为"未识别"。
+      const first = s.sites.find((x) => !x.hidden) ?? null
+      setState({
+        activeSiteId: first?.id ?? null,
+        recognizedSiteId: first && first.openIn === 'cdp' ? first.id : null,
+      })
     }
     if (s.historyOpen && s.captures.length === 0) void refreshHistory()
   }, [])
@@ -211,7 +217,22 @@ async function refreshSites(): Promise<void> {
   try {
     const res = await fetch('/dsh-webrelay/api/sites')
     const body = await res.json() as { ok: boolean, sites?: import('./state.js').SiteInfo[] }
-    if (body.ok && body.sites && body.sites.length > 0) setState({ sites: body.sites, activeSiteId: getState().activeSiteId ?? body.sites.find((x) => !x.hidden)?.id ?? null })
+    if (body.ok && body.sites && body.sites.length > 0) {
+      const before = getState()
+      // 首次回填（此前没有激活站点）时顺带选定首个可见站点；
+      // 若选中的是联动（CDP）站点，一并写 recognizedSiteId，避免闪电菜单误判"未识别"。
+      // 若此前已有激活站点，则保持用户当前选择不动。
+      if (before.activeSiteId === null) {
+        const picked = body.sites.find((x) => !x.hidden) ?? null
+        setState({
+          sites: body.sites,
+          activeSiteId: picked?.id ?? null,
+          recognizedSiteId: picked && picked.openIn === 'cdp' ? picked.id : before.recognizedSiteId,
+        })
+      } else {
+        setState({ sites: body.sites })
+      }
+    }
   } catch {
     notify('站点配置加载失败')
   }

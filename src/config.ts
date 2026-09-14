@@ -57,6 +57,20 @@ export interface OptimizeConfig {
   maxTokens: number
   /** 'off' 关闭思考链（默认）；null = 跟随模型默认。 */
   reasoningEffort: string | null
+  /** 优化风格：preserve（默认，贴着原文语气小改）| structured（允许分节结构化）。 */
+  style: 'preserve' | 'structured'
+  /** 追加给优化器的结构偏好（如"输出必须含 JSON schema"）；null = 不加约束。 */
+  structureHint: string | null
+  /** 抓取内容二次提取（整理）用的模型；null = 沿用 provider/model 自动解析。 */
+  extractProvider: string | null
+  extractModel: string | null
+  /** 二次提取的温度（低于优化温度，倾向忠实整理而非发挥）。 */
+  extractTemperature: number
+  extractMaxTokens: number
+  /** 等待外部 AI 回复的上限（毫秒）；超时后进入"可续等"态。 */
+  relayTimeoutMs: number
+  /** 上下文压缩读取的对话条数。 */
+  contextLimit: number
 }
 
 export interface CaptureConfig {
@@ -161,12 +175,22 @@ function sanitizeRelay(v: unknown): RelayConfig {
 
 function sanitizeOptimize(v: unknown): OptimizeConfig {
   const r = asRecord(v)
+  const num = (value: unknown, fallback: number, min: number, max: number): number =>
+    typeof value === 'number' && Number.isFinite(value) && value >= min && value <= max ? value : fallback
   return {
     provider: typeof r.provider === 'string' && r.provider.length > 0 ? r.provider : null,
     model: typeof r.model === 'string' && r.model.length > 0 ? r.model : null,
-    temperature: typeof r.temperature === 'number' && r.temperature >= 0 && r.temperature <= 2 ? r.temperature : 0.4,
+    temperature: num(r.temperature, 0.4, 0, 2),
     maxTokens: typeof r.maxTokens === 'number' && r.maxTokens > 0 ? Math.floor(r.maxTokens) : 4096,
     reasoningEffort: typeof r.reasoningEffort === 'string' && r.reasoningEffort.length > 0 ? r.reasoningEffort : 'off',
+    style: r.style === 'structured' ? 'structured' : 'preserve',
+    structureHint: typeof r.structureHint === 'string' && r.structureHint.trim().length > 0 ? r.structureHint.trim() : null,
+    extractProvider: typeof r.extractProvider === 'string' && r.extractProvider.length > 0 ? r.extractProvider : null,
+    extractModel: typeof r.extractModel === 'string' && r.extractModel.length > 0 ? r.extractModel : null,
+    extractTemperature: num(r.extractTemperature, 0.2, 0, 2),
+    extractMaxTokens: typeof r.extractMaxTokens === 'number' && r.extractMaxTokens > 0 ? Math.floor(r.extractMaxTokens) : 8192,
+    relayTimeoutMs: num(r.relayTimeoutMs, 120_000, 10_000, 600_000),
+    contextLimit: typeof r.contextLimit === 'number' && r.contextLimit > 0 ? Math.min(Math.floor(r.contextLimit), 200) : 40,
   }
 }
 

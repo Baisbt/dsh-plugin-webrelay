@@ -11,6 +11,9 @@
  *   GET  /dsh-webrelay/api/sites                 站点列表（含 DOM 适配器）
  *   POST /dsh-webrelay/api/sites/manage          站点管理（添加/删除/隐藏/排序/重置）
  *   POST /dsh-webrelay/api/optimize              提示词优化（text/plain 流式回传）
+ *   POST /dsh-webrelay/api/extract               抓取内容二次提取整理（text/plain 流式回传）
+ *   POST /dsh-webrelay/api/compress              对话流上下文压缩（text/plain 流式回传）
+ *   POST /dsh-webrelay/api/cdp/send              外发到联动标签页并等待回复（选项二 S3+S4）
  *   GET  /dsh-webrelay/api/captures              捕获列表
  *   POST /dsh-webrelay/api/captures              保存捕获
  *   GET  /dsh-webrelay/api/captures/read?file=   读取单条捕获
@@ -18,9 +21,11 @@
 import { loadConfig, type WebrelayConfig } from './config.js'
 import { manageSites } from './site-manage.js'
 import { CookieJar, handleProxy, parseProxyPath } from './relay.js'
-import { buildAdapterExpression, adapterTestPageHtml } from './page-adapter.js'
-import { findTab, listTargets, openSiteTab, closeTab, evaluateOnTarget, detectBrowserPath, resolveBrowser, launchBrowser, probePort, BROWSER_PROFILE_ROOT } from './cdp.js'
-import { optimizePrompt, type LlmLike } from './optimize.js'
+import { buildCaptureExpression, buildSendExpression, adapterTestPageHtml } from './page-adapter.js'
+import { findTab, listTargets, openSiteTab, closeTab, evaluateOnTarget, detectBrowserPath, resolveBrowser, launchBrowser, BROWSER_PROFILE_ROOT } from './cdp.js'
+import { optimizePrompt, type LlmLike, type OptimizeOptions, type OptimizePhase } from './optimize.js'
+import { extractContent, EXTRACT_INPUT_LIMIT } from './extract.js'
+import { compressContext, COMPRESS_INPUT_LIMIT } from './context-compress.js'
 import { listCaptures, readCapture, saveCapture } from './captures.js'
 import { registerCapturesTool } from './tools.js'
 import { readBody, rejectUntrusted, respondError, respondJson, trustedRequest } from './http-util.js'
@@ -42,6 +47,18 @@ interface HostContext {
   effect(fn: () => unknown, name?: string): unknown
   get(service: string): unknown
   webServer: WebServerLike
+}
+
+/** 把配置的 optimize 段规整为优化/提取两条链路共用的调用参数。 */
+function optimizeOptions(cfg: WebrelayConfig): OptimizeOptions {
+  return {
+    temperature: cfg.optimize.temperature,
+    maxTokens: cfg.optimize.maxTokens,
+    model: { provider: cfg.optimize.provider, model: cfg.optimize.model },
+    reasoningEffort: cfg.optimize.reasoningEffort,
+    style: cfg.optimize.style,
+    structureHint: cfg.optimize.structureHint,
+  }
 }
 
 export function apply(ctx: HostContext): void {
@@ -122,7 +139,7 @@ export function apply(ctx: HostContext): void {
     },
   }))
 
-  // ── CDP 专用联动浏览器（状态 / 启动 / 打开站点 / 中继注入） ──
+  // ── CDP 专用联动浏览器（状态 / 启动 / 打开站点 / 只读捕捉） ──
   disposers.push(ctx.webServer.register({
     kind: 'exact',
     path: '/dsh-webrelay/api/cdp/status',
@@ -199,42 +216,38 @@ export function apply(ctx: HostContext): void {
     },
   }))
 
+  // ── CDP 只读抓取：读取联动标签页正文（选项二捕捉，不注入不发送） ──
   disposers.push(ctx.webServer.register({
     kind: 'exact',
-    path: '/dsh-webrelay/api/cdp/relay',
+    path: '/dsh-webrelay/api/cdp/capture',
     handler: async (req, res) => {
       if (!trustedRequest(req)) return rejectUntrusted(res)
       try {
-        const body = JSON.parse((await readBody(req)) || '{}') as { siteId?: unknown, message?: unknown }
+        const body = JSON.parse((await readBody(req)) || '{}') as { siteId?: unknown }
         const siteId = typeof body.siteId === 'string' ? body.siteId : ''
-        const message = typeof body.message === 'string' ? body.message : ''
         if (siteId.length === 0) throw new Error('siteId is required')
-        if (message.trim().length === 0) throw new Error('message is required')
         const cfg = config()
         const site = cfg.sites.find((s) => s.id === siteId)
         if (!site) throw new Error(`未知站点：${siteId}`)
         const browser = resolveBrowser(cfg, site)
-        if (!await probePort(browser.port)) {
-          const ensured = await openSiteTab(cfg, site)
-          if (!ensured.ok) throw new Error(ensured.error ?? '联动浏览器不可用')
-        }
         const found = await findTab(browser, site)
-        if (!found.target) throw new Error(found.error ?? '未找到联动标签页')
+        if (!found.target) throw new Error(found.error ?? '未找到联动标签页（请先打开该站点）')
         const outcome = await evaluateOnTarget(
           browser.port,
           found.target.id,
-          buildAdapterExpression(site, message),
+          buildCaptureExpression(site),
         ) as { ok: boolean, value?: unknown, error?: string }
         if (!outcome.ok) throw new Error(outcome.error ?? '页面执行失败')
-        const value = outcome.value as { ok?: boolean, reply?: string, url?: string, error?: string }
-        if (!value?.ok) throw new Error(value?.error ?? '适配器执行失败')
-        respondJson(res, 200, { ok: true, reply: value.reply, url: value.url })
+        const value = outcome.value as { ok?: boolean, raw?: string, url?: string, error?: string }
+        if (!value?.ok) throw new Error(value?.error ?? '页面正文抓取失败')
+        respondJson(res, 200, { ok: true, raw: value.raw, url: value.url })
       } catch (err) {
         respondError(res, err)
       }
     },
   }))
 
+  // ── CDP 关闭联动标签页 ──
   disposers.push(ctx.webServer.register({
     kind: 'exact',
     path: '/dsh-webrelay/api/cdp/close',
@@ -279,11 +292,18 @@ export function apply(ctx: HostContext): void {
       if (!trustedRequest(req)) return rejectUntrusted(res)
       try {
         const body = JSON.parse((await readBody(req)) || '{}') as {
-          draft?: unknown, context?: unknown, provider?: unknown, model?: unknown
+          draft?: unknown, context?: unknown, externalReply?: unknown, phase?: unknown, provider?: unknown, model?: unknown
         }
         const draft = typeof body.draft === 'string' ? body.draft : ''
         if (draft.trim().length === 0) throw new Error('draft is required')
         const context = typeof body.context === 'string' ? body.context : undefined
+        const externalReply = typeof body.externalReply === 'string' && body.externalReply.trim().length > 0
+          ? body.externalReply
+          : undefined
+        // phase 显式传入优先；缺省时按"有无外部回答"自动判定（有回答即终稿轮）。
+        const phase: OptimizePhase = body.phase === 'outbound' || body.phase === 'final' || body.phase === 'single'
+          ? body.phase
+          : externalReply ? 'final' : 'single'
         const provider = typeof body.provider === 'string' && body.provider.length > 0 ? body.provider : undefined
         const model = typeof body.model === 'string' && body.model.length > 0 ? body.model : undefined
         const cfg = config()
@@ -296,21 +316,180 @@ export function apply(ctx: HostContext): void {
         })
         const result = await optimizePrompt(
           llm,
-          { draft, context, provider, model },
-          { temperature: cfg.optimize.temperature, maxTokens: cfg.optimize.maxTokens, model: { provider: cfg.optimize.provider, model: cfg.optimize.model }, reasoningEffort: cfg.optimize.reasoningEffort },
+          { draft, context, externalReply, provider, model },
+          optimizeOptions(cfg),
           (delta) => {
             try { res.write(delta) } catch { /* socket gone */ }
           },
+          phase,
         )
         res.end()
         const logger = ctx.get('logger') as { debug?(...args: unknown[]): void } | undefined
-        logger?.debug?.(`dsh-webrelay: optimized via ${result.provider}/${result.model} (${result.text.length} chars)`)
+        logger?.debug?.(`dsh-webrelay: optimized[${phase}] via ${result.provider}/${result.model} (${result.text.length} chars)`)
       } catch (err) {
         // 头已发出时只能截断流；否则回 JSON 错误。
         if (res.headersSent) {
           try { res.end('\n[dsh-webrelay] 优化失败：' + String((err as Error)?.message ?? err)) } catch { /* gone */ }
           return
         }
+        respondError(res, err)
+      }
+    },
+  }))
+
+  // ── 抓取内容二次提取整理（流式；LLM 缺失时内部降级为启发式清洗，不报错） ──
+  disposers.push(ctx.webServer.register({
+    kind: 'exact',
+    path: '/dsh-webrelay/api/extract',
+    handler: async (req, res) => {
+      if (!trustedRequest(req)) return rejectUntrusted(res)
+      let headersSent = false
+      try {
+        const body = JSON.parse((await readBody(req)) || '{}') as {
+          raw?: unknown, siteName?: unknown, url?: unknown, intent?: unknown, provider?: unknown, model?: unknown
+        }
+        const raw = typeof body.raw === 'string' ? body.raw : ''
+        if (raw.trim().length === 0) throw new Error('raw is required')
+        const siteName = typeof body.siteName === 'string' ? body.siteName : undefined
+        const url = typeof body.url === 'string' ? body.url : undefined
+        const intent = typeof body.intent === 'string' ? body.intent : undefined
+        const provider = typeof body.provider === 'string' && body.provider.length > 0 ? body.provider : undefined
+        const model = typeof body.model === 'string' && body.model.length > 0 ? body.model : undefined
+        const cfg = config()
+        // llm 服务缺失不算致命：extractContent 会退回启发式清洗。
+        const llm = ctx.get('llm') as LlmLike | undefined ?? undefined
+        res.writeHead(200, {
+          'Content-Type': 'text/plain; charset=utf-8',
+          'Cache-Control': 'no-store',
+          'Transfer-Encoding': 'chunked',
+        })
+        headersSent = true
+        const options: OptimizeOptions = {
+          ...optimizeOptions(cfg),
+          maxTokens: cfg.optimize.extractMaxTokens,
+          temperature: cfg.optimize.extractTemperature,
+          model: { provider: cfg.optimize.extractProvider ?? cfg.optimize.provider, model: cfg.optimize.extractModel ?? cfg.optimize.model },
+        }
+        const result = await extractContent(llm, { raw, siteName, url, intent, provider, model }, options, (delta) => {
+          try { res.write(delta) } catch { /* socket gone */ }
+        })
+        // 尾部标记：降级通道与截断信息以注释行告知 client，正文之外不产生可见噪声。
+        if (result.via === 'fallback' && result.reason) {
+          try { res.write(`\n\n[dsh-webrelay:fallback] ${result.reason}`) } catch { /* gone */ }
+        }
+        res.end()
+        const logger = ctx.get('logger') as { debug?(...args: unknown[]): void } | undefined
+        logger?.debug?.(`dsh-webrelay: extracted via ${result.via}${result.provider ? ` ${result.provider}/${result.model}` : ''} (${result.text.length} chars, input ${raw.length}/${EXTRACT_INPUT_LIMIT})`)
+      } catch (err) {
+        if (headersSent) {
+          try { res.end('\n[dsh-webrelay] 提取失败：' + String((err as Error)?.message ?? err)) } catch { /* gone */ }
+          return
+        }
+        respondError(res, err)
+      }
+    },
+  }))
+
+  // ── 对话流上下文压缩（选项二 S1；流式；LLM 缺失时降级为保留最近对话） ──
+  disposers.push(ctx.webServer.register({
+    kind: 'exact',
+    path: '/dsh-webrelay/api/compress',
+    handler: async (req, res) => {
+      if (!trustedRequest(req)) return rejectUntrusted(res)
+      let headersSent = false
+      try {
+        const body = JSON.parse((await readBody(req)) || '{}') as {
+          sessionId?: unknown, transcript?: unknown, draft?: unknown, limit?: unknown, provider?: unknown, model?: unknown
+        }
+        const draft = typeof body.draft === 'string' ? body.draft : undefined
+        const provider = typeof body.provider === 'string' && body.provider.length > 0 ? body.provider : undefined
+        const model = typeof body.model === 'string' && body.model.length > 0 ? body.model : undefined
+        // 转写优先取 client 直传；否则 host 侧自读会话流（client 不必解析会话内部结构）。
+        let transcript = typeof body.transcript === 'string' ? body.transcript : ''
+        let viaSession = false
+        if (transcript.trim().length === 0) {
+          const sessionId = typeof body.sessionId === 'string' ? body.sessionId : ''
+          if (sessionId.length === 0) throw new Error('sessionId or transcript is required')
+          const limit = typeof body.limit === 'number' && body.limit > 0 ? Math.min(Math.floor(body.limit), 200) : 40
+          const sessionQuery = ctx.get('sessionQuery') as SessionQueryLike | undefined
+          const context = await recentContext(sessionQuery, sessionId, limit)
+          transcript = context ?? ''
+          viaSession = true
+        }
+        const cfg = config()
+        // llm 服务缺失不算致命：compressContext 会退回尾部截断。
+        const llm = ctx.get('llm') as LlmLike | undefined ?? undefined
+        res.writeHead(200, {
+          'Content-Type': 'text/plain; charset=utf-8',
+          'Cache-Control': 'no-store',
+          'Transfer-Encoding': 'chunked',
+        })
+        headersSent = true
+        const result = await compressContext(llm, { transcript, draft, provider, model }, {
+          ...optimizeOptions(cfg),
+          maxTokens: Math.min(optimizeOptions(cfg).maxTokens, 2048),
+          temperature: 0.2,
+        }, (delta) => {
+          try { res.write(delta) } catch { /* socket gone */ }
+        })
+        // 无可用历史时不写正文，仅以标记告知 client（client 会当作"无背景"处理）。
+        if (result.via === 'none') {
+          try { res.write(`[dsh-webrelay:fallback] ${result.reason ?? '会话无可用历史'}`) } catch { /* gone */ }
+        } else if (result.via === 'fallback' && result.reason) {
+          try { res.write(`\n\n[dsh-webrelay:fallback] ${result.reason}`) } catch { /* gone */ }
+        }
+        res.end()
+        const logger = ctx.get('logger') as { debug?(...args: unknown[]): void } | undefined
+        logger?.debug?.(`dsh-webrelay: compressed via ${result.via}${viaSession ? ' (host-read)' : ' (client-transcript)'} in ${transcript.length}/${COMPRESS_INPUT_LIMIT}`)
+      } catch (err) {
+        if (headersSent) {
+          try { res.end('\n[dsh-webrelay] 压缩失败：' + String((err as Error)?.message ?? err)) } catch { /* gone */ }
+          return
+        }
+        respondError(res, err)
+      }
+    },
+  }))
+
+  // ── 外发到联动标签页并等待回复（选项二 S3+S4；仅 CDP 联动模式） ──
+  disposers.push(ctx.webServer.register({
+    kind: 'exact',
+    path: '/dsh-webrelay/api/cdp/send',
+    handler: async (req, res) => {
+      if (!trustedRequest(req)) return rejectUntrusted(res)
+      try {
+        const body = JSON.parse((await readBody(req)) || '{}') as { siteId?: unknown, message?: unknown, timeoutMs?: unknown }
+        const siteId = typeof body.siteId === 'string' ? body.siteId : ''
+        const message = typeof body.message === 'string' ? body.message : ''
+        if (siteId.length === 0) throw new Error('siteId is required')
+        if (message.trim().length === 0) throw new Error('message is required')
+        const cfg = config()
+        // 等待上限：默认取配置（120s），允许 client 覆盖但钳制在 10s–10min。
+        const rawTimeout = typeof body.timeoutMs === 'number' ? Math.floor(body.timeoutMs) : cfg.optimize.relayTimeoutMs
+        const timeoutMs = Math.min(Math.max(rawTimeout, 10_000), 600_000)
+        const site = cfg.sites.find((s) => s.id === siteId)
+        if (!site) throw new Error(`未知站点：${siteId}`)
+        const browser = resolveBrowser(cfg, site)
+        const found = await findTab(browser, site)
+        if (!found.target) throw new Error(found.error ?? '未找到联动标签页（请先打开该站点）')
+        // 表达式内含等待循环，故 CDP 侧超时须大于页面内等待上限。
+        const outcome = await evaluateOnTarget(
+          browser.port,
+          found.target.id,
+          buildSendExpression(site, message, timeoutMs),
+          timeoutMs + 30_000,
+        ) as { ok: boolean, value?: unknown, error?: string }
+        if (!outcome.ok) throw new Error(outcome.error ?? '页面执行失败')
+        const value = outcome.value as { ok?: boolean, reply?: string, url?: string, timedOut?: boolean, error?: string }
+        // 页面内超时统一以 200 + ok:false + timedOut 回给 client，由 client 决定续等/采用。
+        respondJson(res, 200, {
+          ok: value?.ok === true,
+          reply: value?.reply ?? '',
+          url: value?.url ?? '',
+          timedOut: value?.timedOut === true,
+          ...(value?.error ? { error: value.error } : {}),
+        })
+      } catch (err) {
         respondError(res, err)
       }
     },
