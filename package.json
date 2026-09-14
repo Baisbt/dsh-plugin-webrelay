@@ -43,9 +43,7 @@
     }
   },
   "peerDependencies": {
-    "cordis": "*",
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0"
+    "cordis": "*"
   },
   "dependencies": {
     "yaml": "^2.6.1"

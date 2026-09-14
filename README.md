@@ -79,7 +79,7 @@
 
 - 运行时依赖：`yaml ^2.6.1`
 - 开发依赖：`typescript ^5.9.3`、`tsdown ^0.22.14`、`@types/node ^24.13.3`、`@types/react ~18.3.1`、`@types/react-dom ~18.3.0`
-- peerDependency：`cordis: *`、`react ^18.2.0`、`react-dom ^18.2.0`（后两者由宿主 Web UI 提供，故只声明不打包）
+- peerDependency：`cordis: *`（宿主契约标记；`react` / `react-dom` 由浏览器 loader 的模块表提供，不作为包依赖声明）
 
 **关键路径**（下文频繁出现，先集中说明）：
 

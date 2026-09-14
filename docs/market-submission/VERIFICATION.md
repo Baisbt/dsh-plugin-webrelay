@@ -28,7 +28,7 @@
 | 10 | 官方 `@deepseek-ai/*` 用 peerDependencies 声明 | ❌ | ✅ **判定下调**（不 import，无需声明） |
 | 11 | peer 范围需覆盖预发布 | ❌ | ✅ **判定下调**（`cordis` 是宿主契约标记，同作者已收录条目同款） |
 | 12 | `LICENSE` 文件与声明一致 | ❌ | ✅ **已修复**（补 MIT 全文） |
-| 13 | `react` / `react-dom` 声明为 peer（新发现） | — | ✅ **已修复**（补 `^18.2.0`） |
+| 13 | `react` / `react-dom` 声明为 peer（一度判为缺口） | — | ✅ **已撤回**（实测证明不该声明，见 §二·13） |
 | 14 | `package.json#repository` | ⬜ | ✅ **已修复** |
 | 15 | 工作树干净 | ⚠️ | ✅ **已修复**（`.gitignore` 一并提交） |
 | 16 | 发布 npm 包（推荐） | ⬜ | ⬜ 未做（不影响收录） |
@@ -181,26 +181,38 @@ semver 7.8.5 实测：
 版权行取自同作者已收录仓库 `Baisbt/dsh-GreaterClarity-plugin` 的 `LICENSE` 原文，逐字一致：
 `Copyright (c) 2026 Baisbt`（非臆造）。GitHub 侧的 `license` 字段将在下次扫描后变为 MIT。
 
-### ✅ 13.【已修复·新发现】`react` / `react-dom` 是真缺口
+### ✅ 13.【已撤回】`react` / `react-dom` 曾一度被判为缺口
 
-首轮漏掉的一项，由上面的导入扫描暴露：
+首轮导入扫描确实发现 client 半 6 个文件 import `react`、1 个 import `react-dom`，而 package.json 里毫无声明。
+当时据此补了 `"react"/"react-dom": "^18.2.0"`。**随后对目标机器做真实 DSH profile 勘查，证明这个补法有害，已撤回。**
 
-- client 半 **6 个文件** import `react`、**1 个文件** import `react-dom`（portal 渲染）；
-- `tsdown.config.ts` 把它们列为 client 侧 external（必须由宿主提供，不得打进 bundle）；
-- 但 `package.json` 里**既不在 dependencies 也不在 peerDependencies**——只有 `@types/react` 在 devDependencies。
+实测事实（`C:\Users\27144\.dsh` + 全局 dsh 安装树 `@deepseek-ai/dsh@0.1.1-rc.1`）：
 
-已补：
+| 观察 | 结果 |
+|------|------|
+| `profiles/node_modules/react` | → `18.3.1`（宿主唯一顶层 React，来自 dsh 自身依赖树） |
+| `profiles/node_modules/react-dom` | → **19.2.8**，且该副本位于 `dsh-client-ui-trajectory/node_modules/`，**旁边并排着一个 `react@19.2.8`** |
+| 全树递归搜 `react-dom` 实体 | 只有这一处，**顶层根本没有 react-dom** |
+| `dsh-client-ui-trajectory` 的 dependencies | `{"@tanstack/react-virtual":"^3.14.9","diff":"^9.0.0"}` ← 19.2.8 是它自动装的 **peer** |
+| 所有 `@deepseek-ai/dsh-client-*` 包 | **无一**在 dependencies 或 peerDependencies 里声明 react / react-dom |
 
-```jsonc
-"peerDependencies": {
-  "cordis": "*",
-  "react": "^18.2.0",
-  "react-dom": "^18.2.0"
-}
-```
+结论三条：
 
-版本范围依据：宿主 `@deepseek-ai/dsh-client-runtime` 自身 `dependencies` 即为 `"react": "^18.2.0"`；
-已收录的 `Nono-neko/dsh-browser` 同样用 `{"react":"^18.2.0","react-dom":"^18.2.0"}`。**这是本次修正里唯一一处真缺口。**
+1. **profile 里那个 `react-dom@19.2.8` 不是宿主运行时 React DOM**，而是嵌套包自动安装 peer 的产物。
+   我们的 `^18.2.0` 对它**不满足**。
+2. profile 的 `package.json` 依赖只有插件本身 + bundles，`.pnpm` 里仅 1 项——profile 的依赖图几乎是空的，
+   宿主模块全部来自 `profiles/node_modules` 这个指向全局 dsh 的链接农场。在这种结构下声明 `react-dom` peer，
+   pnpm 很可能**往 profile 里自动装一份 react-dom** —— 那正是贡献指南所谓 *「duplicates／duplicate runtimes inside the profile」*。
+   **补 peer 反而会制造指南要消除的问题。**
+3. DSH 的客户端 React 由**浏览器 loader 的模块表**提供（`tsdown` 之所以把 react/react-dom 列为 external），
+   不走 npm 解析。这也解释了为什么 DSH 自家 client 包一个都不声明它们。
+
+→ **撤回，恢复 `peerDependencies: { "cordis": "*" }` 原状。** 该状态已在本机 profile 里**被证明可安装**
+（`profiles/web/package.json` 的 `dependencies` 里 `link:` 条目与 `dsh.profile.bundles` 均已存在）。
+向公开市场提交元数据改动而零功能收益、却带安装期风险，是不该做的。
+
+> 已收录的 `Nono-neko/dsh-browser` 确实写了 `{"react":"^18.2.0","react-dom":"^18.2.0"}`，
+> 所以该写法在市场里不算违规——但在**本机可复现的解析结果**面前它是有风险的，本仓库选择不跟。
 
 ### ✅ 14.【已修复】`package.json#repository`
 
@@ -220,12 +232,12 @@ semver 7.8.5 实测：
 | 文件 | 改动 |
 |------|------|
 | `LICENSE` | **新增**（MIT 全文） |
-| `package.json` | 新增 `repository` 字段；`peerDependencies` 增加 `react` / `react-dom` |
-| `README.md` | 「依赖清单」的 peer 行补上 react/react-dom；第 9 步的「LICENSE 尚未提供」注记改为已提供 |
+| `package.json` | 新增 `repository` 字段（`peerDependencies` 最终**未改动**，见 §二·13） |
+| `README.md` | 「依赖清单」的 peer 行补注 react/react-dom 的来源说明；第 9 步「LICENSE 尚未提供」的注记改为已提供 |
 | `.gitignore` | 提交首轮遗留的未提交改动（分节注释） |
 
 验证：`node scripts/check.cjs` → `TSC OUTPUT: (clean)`；`node scripts/build.cjs` →
-`lib/client.js 92.87 kB` / `lib/index.js 334.39 kB`，**与修改前完全一致**，说明改动是纯元数据、未触及打包产物。
+`lib/client.js 92.87 kB` / `lib/index.js 334.39 kB`，**与改动前完全一致**，说明改动是纯元数据、未触及打包产物。
 
 ---
 
@@ -252,10 +264,31 @@ semver 7.8.5 实测：
 - **npm 侧**：`registry.npmjs.org` 的 `cordis` / `@deepseek-ai/dsh` / `@deepseek-ai/dsh-client-*` dist-tags 与依赖字段。
 - **semver 行为**：本机以 semver 7.8.5 实跑 `satisfies()` 取得，非查表。
 
-**未验证项（如实说明）**：
+**真实 profile 勘查（本轮新增的最强一手证据）**
 
-- 本机 `dsh` CLI 处于损坏状态（npm shim 无法解析 `@deepseek-ai/dsh`，报 `MODULE_NOT_FOUND`），
-  因此**无法在本机复现一次 `dsh plugin add` 真实安装**，也无法验证新增的 `react` / `react-dom` peer
-  在真实 profile 中的解析结果。市场 CI 对「可安装」的校验只读取 `package.json` 的 `dsh.bundle` 声明，
-  不做真实安装，故不影响 CI；但**建议在有可用 dsh 的环境跑一次 link 安装确认 peer 解析无碍**。
+> 首轮曾把「本机 dsh CLI 损坏」写进未验证项——**那是误判**：`dsh` 本身完好（`@deepseek-ai/dsh@0.1.1-rc.1`，
+> 直接 `node <dsh>/lib/bin.js --version` 正常返回）。报 `MODULE_NOT_FOUND` 是因为本工具所用 bash
+> 缺 `dirname`/`sed`，导致 `AppData/Roaming/npm/dsh` 这个 shell shim 算不出自身路径。**你的 dsh 没坏。**
+
+因此本轮直接勘查了真实安装状态 `C:\Users\27144\.dsh`：
+
+| 观察 | 值 |
+|------|-----|
+| `profiles/web/package.json#dependencies` | `{"@dsh-external/dsh-webrelay": "link:D:/dsharness/deepseek-harness/router/dsh-plugin-webrelay"}` |
+| `profiles/web/package.json#dsh.profile.bundles` | `["@deepseek-ai/dsh-base","@deepseek-ai/dsh-web-app","@dsh-external/dsh-webrelay"]` |
+| 链接实体 | `profiles/web/node_modules/@dsh-external/dsh-webrelay → D:\dsharness\...\dsh-plugin-webrelay` |
+| `webrelay/` 运行痕迹 | `sites.yml`、`captures/2026-09-13T12-25-36-518Z-selftest.md`、`browser-profile/` |
+| 宿主实际 cordis | **只有 `@deepseek-ai/cordis@4.0.1`，没有名为 `cordis` 的包** |
+
+→ **「能被 `dsh plugin add` 安装」已是既成事实，不再是待验证项。**
+
+**仍然未验证 / 已知但不改的项**：
+
+- **`cordis: "*"` 指向的包名与宿主不符。** 宿主提供的是 `@deepseek-ai/cordis@4.0.1`，
+  而 `peerDependencies` 写的是无 scope 的 `cordis` —— 本仓库 `pnpm-lock.yaml` 里确实解析到了
+  公共 registry 上的 `cordis@4.0.0-rc.10`（Koishi 生态的那个包），属**无用重量**。
+  **本轮刻意不改**：该声明只是宿主契约标记（源码不 import cordis），
+  同作者已收录的 `Baisbt/dsh-GreaterClarity-plugin` 用的是完全相同的写法且已被市场接受；
+  在「市场 CI 不校验 peer 范围」的前提下，为这点收益再次改动框架级声明不划算。
+  若日后要改，方向是换成 `"@deepseek-ai/cordis": "^4.0.1"`（宿主已装 4.0.1，可满足）。
 - 市场 CI 的实际脚本未逐一读取（`contributing.md` 已逐条文字说明：条目数 → `dsh.bundle` → 仓库年龄 → `awesome-lint` 与站点构建）。

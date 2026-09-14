@@ -42,7 +42,7 @@ Add Baisbt/dsh-plugin-webrelay (browser)
 **Recommended (not required) / 推荐但不强制：**
 
 - [ ] 📦 Publish to npm — npm installs are prebuilt and skip the `allowBuilds` approval, so users get a one-command install / 发布 npm 包（尚未发布；源码安装需 `allowBuilds` 授权一次）
-- [x] 🔗 Declare official `@deepseek-ai/*` packages as `peerDependencies` / 官方 `@deepseek-ai/*` 包用 `peerDependencies` 声明 —— 本插件 host 与 client 源码**不 import 任何 `@deepseek-ai/*` 包**（仅经 `dsh.client.inject` 由宿主 loader 提供），故无此类 peer 需声明；实际 import 的 `react` / `react-dom` 已声明为 `peerDependencies: ^18.2.0`
+- [x] 🔗 Declare official `@deepseek-ai/*` packages as `peerDependencies` / 官方 `@deepseek-ai/*` 包用 `peerDependencies` 声明 —— 本插件 host 与 client 源码**不 import 任何 `@deepseek-ai/*` 包**，宿主模块（含 `react` / `react-dom`）一律由浏览器 loader 的模块表提供、经 `dsh.client.inject` 登记，故无包级 peer 需声明。`peerDependencies` 保持 `{"cordis": "*"}` 这一宿主契约标记不动。
 - [ ] 🖼️ Screenshots go in **your own repository** now: a `screenshots.json` beside your `package.json`, listing image paths / 截图放在自己仓库的 `screenshots.json`（**尚未提供**）
 ```
 
