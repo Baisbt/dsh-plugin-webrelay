@@ -79,7 +79,7 @@
 
 - 运行时依赖：`yaml ^2.6.1`
 - 开发依赖：`typescript ^5.9.3`、`tsdown ^0.22.14`、`@types/node ^24.13.3`、`@types/react ~18.3.1`、`@types/react-dom ~18.3.0`
-- peerDependency：`cordis: *`
+- peerDependency：`cordis: *`、`react ^18.2.0`、`react-dom ^18.2.0`（后两者由宿主 Web UI 提供，故只声明不打包）
 
 **关键路径**（下文频繁出现，先集中说明）：
 
@@ -392,7 +392,7 @@ lib / sites.default.yml / cordis.patch.yml / README.md / LICENSE
 
 即 `pnpm pack` 产出的 tarball 只含构建产物与配置模板，不含源码。
 
-> 注：白名单中包含 `LICENSE`，但仓库当前尚未提供该文件；正式发布前请补一份（`package.json` 已声明 `"license": "MIT"`）。
+> 白名单中的 `LICENSE` 已随仓库提供（MIT，见仓库根目录 `LICENSE`）。
 
 ---
 

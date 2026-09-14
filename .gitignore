@@ -12,5 +12,7 @@ node_modules/
 *.log
 .DS_Store
 .zcode/
+
+# 本地 Agent 约束文件（仅供本地读取，不入库）
 AGENTS.md
 .workbuddy/
